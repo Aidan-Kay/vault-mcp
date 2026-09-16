@@ -40,6 +40,7 @@ os.environ["VAULT_PATH"] = str(_VAULT)
 
 import httpx  # noqa: E402
 
+from src import maintenance  # noqa: E402
 from src.server import app  # noqa: E402
 
 FAILURES: list[str] = []
@@ -568,6 +569,51 @@ def test_body_patch() -> None:
     check_in("and points at POST instead", "POST to the note", appended.text)
 
 
+# --------------------------------------------------------------------------
+# 2.6  /maintenance
+#
+# The fixture vault has no .scripts/, and that is the point: every checker
+# reports itself missing, which exercises the shape of the answer and the
+# not-found branch without running seven real walks over a temp directory.
+#
+# The assertion that matters is the status code. A vault full of findings must
+# still be a 200 - the caller branches on "did the suite run", and a route that
+# answered 500 for a broken link would make the workflow's error path fire on
+# exactly the weeks the report is worth reading.
+# --------------------------------------------------------------------------
+
+
+def test_maintenance() -> None:
+    got = call("GET", "/maintenance")
+    check("a run with nothing to run is still 200", got.status_code, 200)
+
+    body = got.json()
+    check("one entry per checker", len(body["checks"]), len(maintenance.CHECKS))
+    check("none of them exited zero", body["summary"]["exit_zero"], 0)
+    check("all seven are reported as errored", body["summary"]["errored"], len(maintenance.CHECKS))
+
+    # The markdown rendering is what the workflow actually puts under its
+    # prompt, so a run that produced no findings must still produce a block.
+    check_in("the rendering names every checker", maintenance.CHECKS[-1].title, body["markdown"])
+    check_in("and says a check could not run", "did not run", body["markdown"])
+
+    first = body["checks"][0]
+    check("the order is the order in CHECKS", first["script"], maintenance.CHECKS[0].script)
+    check_in("and a missing script says where it looked", ".scripts", first["error"])
+    check("a missing script has no exit code to report", first["exit_code"], None)
+
+    # POST is accepted so a caller that only sends POSTs needs no special case,
+    # and no query parameter may become an argument - the argv is built from
+    # the constants in src/maintenance.py and nothing else.
+    posted = call("POST", "/maintenance?script=;id")
+    check("POST is accepted too", posted.status_code, 200)
+    check(
+        "and a query parameter changes nothing about what ran",
+        [c["script"] for c in posted.json()["checks"]],
+        [c.script for c in maintenance.CHECKS],
+    )
+
+
 async def _unauthenticated() -> int:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://vault-mcp:8080") as c:
@@ -580,6 +626,7 @@ def main() -> int:
     test_frontmatter_query()
     test_status_codes()
     test_body_patch()
+    test_maintenance()
     if report():
         return 1
     print("rest: all checks passed")

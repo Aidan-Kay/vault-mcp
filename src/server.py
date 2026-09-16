@@ -28,6 +28,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
+from . import maintenance
 from . import operations
 from . import search as search_module
 from . import target as target_mod
@@ -655,6 +656,34 @@ async def frontmatter_endpoint(request: Request) -> JSONResponse | PlainTextResp
     return VaultJSON([{"filename": name} for name in matches])
 
 
+async def maintenance_endpoint(request: Request) -> JSONResponse:
+    """Run the vault's own checkers: /maintenance
+
+    Read-only, and the only route here that does not touch a note. It exists
+    for the weekly maintenance workflow: n8n calls it, hands the JSON to Lyra,
+    and Lyra writes the report. See src/maintenance.py for why the work happens
+    in this container rather than over SSH on the host.
+
+    Answers 200 whenever the suite ran, however many findings it produced - a
+    vault with broken links is a successful check, not a failed request. Only
+    the suite failing to run at all is a 500, which is what lets the caller
+    branch on "the report is missing" without parsing it.
+    """
+    log.info("running the vault maintenance checks")
+    try:
+        result = await asyncio.to_thread(maintenance.run_all)
+    except Exception as exc:  # noqa: BLE001 - the route must not 502 silently
+        log.exception("maintenance run failed")
+        return VaultJSON({"error": f"the maintenance run failed: {exc}"}, status_code=500)
+    log.info(
+        "maintenance checks done in %d ms: %d/%d exited zero",
+        result["duration_ms"],
+        result["summary"]["exit_zero"],
+        result["summary"]["total"],
+    )
+    return VaultJSON(result)
+
+
 rest_app = Starlette(
     routes=[
         Route(
@@ -663,11 +692,14 @@ rest_app = Starlette(
             methods=["GET", "PUT", "POST", "PATCH", "DELETE"],
         ),
         Route("/frontmatter", frontmatter_endpoint, methods=["GET"]),
+        # GET because it changes nothing; POST too, so a caller that only
+        # sends POSTs does not need a special case.
+        Route("/maintenance", maintenance_endpoint, methods=["GET", "POST"]),
     ]
 )
 
 
-REST_PREFIXES = ("/vault", "/frontmatter")
+REST_PREFIXES = ("/vault", "/frontmatter", "/maintenance")
 
 
 class VaultRoutes:
@@ -793,7 +825,7 @@ def main() -> None:
         settings.port,
         settings.host,
         settings.port,
-        "{/vault/<path>,/frontmatter}",
+        "{/vault/<path>,/frontmatter,/maintenance}",
         ", ".join(settings.allowed_hosts),
     )
     uvicorn.run(app, host=settings.host, port=settings.port, log_level="info", access_log=False)
