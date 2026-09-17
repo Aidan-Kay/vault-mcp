@@ -126,6 +126,52 @@ async def _scan_index_doc() -> None:
         log.info("index.md: %s", wrote or f"already current ({len(_indexdoc.entries)} entries)")
 
 
+async def _reconcile_index_doc() -> None:
+    """Re-read every note on a timer and correct index.md if it has drifted.
+
+    The incremental path is only as complete as the event stream feeding it.
+    A directory moved in whole carries no watch and no events, which is what
+    lost AI/Prompts/Server; watcher.py now handles that one, but "the event
+    never came" has more shapes than the one that has bitten us, and without
+    this any of them costs a restart to notice.
+
+    Cheap to be wrong about: the scan is a few seconds of reads, and
+    write_if_changed compares bodies, so a pass that finds nothing touches
+    neither index.md nor git.
+    """
+    interval = settings.index_reconcile_seconds
+    if interval <= 0:
+        return
+
+    global _indexdoc
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            async with _indexdoc_lock:
+                if not _indexdoc_ready:
+                    continue  # the startup scan is about to do this anyway
+                rebuilt = await asyncio.to_thread(IndexDoc.build)
+                if rebuilt.entries == _indexdoc.entries:
+                    continue
+                missing = set(rebuilt.entries) - set(_indexdoc.entries)
+                extra = set(_indexdoc.entries) - set(rebuilt.entries)
+                log.warning(
+                    "reconcile: index.md had drifted (%d missing, %d stale); "
+                    "events were lost for %s",
+                    len(missing),
+                    len(extra),
+                    ", ".join(sorted(missing | extra)[:5]) or "changed entries",
+                )
+                _indexdoc = rebuilt
+                wrote = await asyncio.to_thread(_indexdoc.write_if_changed)
+                log.info("reconcile: %s", wrote or "entries changed but index.md body did not")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # A failed pass is not fatal; the next one tries again.
+            log.exception("reconcile pass failed")
+
+
 async def _refresh_index_doc(path: Path) -> None:
     """Bring index.md back in step after one note changed.
 
@@ -177,6 +223,7 @@ async def lifespan(_server: MCPServer) -> AsyncIterator[None]:
     # immediately and do not depend on Ollama being up.
     build_task = asyncio.create_task(_build_index(), name="index-build")
     scan_task = asyncio.create_task(_scan_index_doc(), name="indexdoc-scan")
+    reconcile_task = asyncio.create_task(_reconcile_index_doc(), name="indexdoc-reconcile")
 
     # Started straight away, no longer behind the embedding build. It used to
     # wait for it and give up if it failed, which was tolerable when search was
@@ -188,7 +235,7 @@ async def lifespan(_server: MCPServer) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        for task in (scan_task, build_task):
+        for task in (reconcile_task, scan_task, build_task):
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task

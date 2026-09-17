@@ -51,6 +51,7 @@ class Settings:
     embed_batch_size: int
     embed_dims: int
     watch_debounce_seconds: float
+    index_reconcile_seconds: float
     host: str
     port: int
 
@@ -104,6 +105,11 @@ def load() -> Settings:
         embed_batch_size=_int("EMBED_BATCH_SIZE", 64),
         embed_dims=_int("EMBED_DIMS", 768),
         watch_debounce_seconds=_float("WATCH_DEBOUNCE_SECONDS", 2.0),
+        # index.md is otherwise only ever updated one note at a time, so an
+        # event that never arrives costs a restart to notice rather than one
+        # pass. watcher.py handles the gap that has actually bitten us; this is
+        # for the ones that have not yet. 0 disables the pass.
+        index_reconcile_seconds=_float("INDEX_RECONCILE_SECONDS", 900.0),
         host=os.environ.get("BIND_HOST", "0.0.0.0"),
         port=_int("BIND_PORT", 8080),
     )
