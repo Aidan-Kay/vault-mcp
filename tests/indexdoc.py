@@ -122,7 +122,8 @@ def main() -> int:
     contains("top-level folder is an H2", text, "\n## Home\n")
     contains("nested folder is an H3", text, "\n### Utilities\n")
     contains("a folder with no notes of its own still gets a heading", text, "\n## Workflows\n")
-    contains("the excluded folder is explained, not silently absent", text, "> `Workflows/Approvals/`")
+    contains("the excluded folder is explained, not silently absent", text,
+             "> [!NOTE] `Workflows/Approvals/` is not indexed note by note")
 
     # --- entries ------------------------------------------------------------
     contains("entry carries the note's own description", text, "- [Levi](Pets/Levi.md) - A dog.")

@@ -249,9 +249,13 @@ def _exclusion_notes(folder: str, exclusions: list[str]) -> list[str]:
         parent = Path(clean).parent
         if (parent.as_posix() if parent != Path(".") else "") != folder:
             continue
+        # A typed callout, per the Callouts section of Meta/Conventions.md: every blockquote in
+        # the vault carries one of the five allowed types, and .scripts/check_callouts.py
+        # enforces it. index.md is exempt from that check because it is generated, but emitting
+        # the bare form here would be the one place the vault contradicts its own convention.
+        lines.append(f"> [!NOTE] `{clean}/` is not indexed note by note")
         lines.append(
-            f"> `{clean}/` is a generated series, written by a workflow rather than "
-            "by hand, and is not indexed note by note."
+            "> It is a generated series, written by a workflow rather than by hand."
         )
         lines.append("")
     return lines
