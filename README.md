@@ -245,3 +245,21 @@ refused to every writer and still readable, and that an edit changing nothing th
 displays does not rewrite it. `tests.primitives` covers the write traps that are silent
 corruption rather than errors — the values that must round-trip through YAML unchanged,
 and the ones that are refused because no spelling of them would.
+
+## Licence
+
+AGPL-3.0-or-later. See [LICENSE](LICENSE).
+
+Copyright (C) 2026 Aidan Kay.
+
+The copyleft is deliberate rather than inherited. The source-document work in
+[docs/plan-of-action.md](docs/plan-of-action.md) will extract PDFs with
+[PyMuPDF](https://pymupdf.readthedocs.io/), which Artifex dual-licenses under AGPL-3.0
+or a commercial licence; taking the AGPL half means this project takes it too. That was
+the occasion for licensing the repo at all, rather than leaving it public and
+all-rights-reserved, which is what it was before.
+
+The practical consequence for anyone running it: if you let other people interact with
+your instance over a network, AGPL section 13 obliges you to offer them the source of
+the version you are running. No image is published anywhere, so every deployment is
+someone's own build from this repo.

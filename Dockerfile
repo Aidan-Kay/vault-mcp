@@ -28,6 +28,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY --from=builder /src/src/ ./src/
 
+# AGPL-3.0: the licence travels with the binary, so a running container can answer
+# what terms it is under without reference to the repo it was built from.
+COPY --from=builder /src/LICENSE ./
+
 # The :ro mount that used to be the primary control is gone - this container
 # writes now. Path containment in safe_resolve() is the control; running as a
 # non-root uid is what is left of defence in depth. uid 1000 also matches the
