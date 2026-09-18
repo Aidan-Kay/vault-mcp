@@ -1,0 +1,60 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 323 >>
+stream
+BT
+/F1 11 Tf
+14 TL
+72 760 Td
+(ACME LIMITED) Tj
+T*
+(Offer of employment) Tj
+T*
+() Tj
+T*
+(Position: Automation engineer) Tj
+T*
+(Start date: 04 May 2026) Tj
+T*
+(Salary: 58,000 per annum) Tj
+T*
+(Notice period: 3 months after probation) Tj
+T*
+(Probation: 6 months) Tj
+T*
+() Tj
+T*
+(This offer is subject to references.) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+6 0 obj
+<< /Title (Acme Ltd - Offer Letter) /Producer (vault-mcp fixture) >>
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000000614 00000 n 
+0000000711 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R /Info 6 0 R >>
+startxref
+795
+%%EOF

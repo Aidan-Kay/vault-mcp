@@ -221,7 +221,13 @@ invalidate it — rebuild with `--no-cache` to pick one up.
 
 ## Tests
 
-Standalone scripts, no test runner:
+```bash
+python -m tests.run                 # everything, against the committed fixture vault
+python -m tests.run --real-vault    # the vault readers against VAULT_PATH instead
+python -m tests.run rest indexdoc   # just these
+```
+
+Each script still runs on its own, which is what you want when one of them fails:
 
 ```bash
 python -m tests.primitives
@@ -230,10 +236,52 @@ python -m tests.resolve_leaves
 python -m tests.write_scope
 python -m tests.indexdoc
 python -m tests.rest
+python -m tests.relevance.eval
 ```
 
-The last three write, so they build their own temp vault rather than touching the real
-one; the first three read the real vault, so they need it mounted.
+`tests.run` gives each script its own subprocess rather than importing them together.
+That is not tidiness: `src.config` resolves settings at import and `tests.indexdoc`
+points `VAULT_PATH` at a temp tree before importing `src`, so two scripts wanting two
+different vaults cannot share an interpreter.
+
+`write_scope`, `indexdoc` and `rest` build their own temp vault. `primitives`,
+`resolve_all` and `resolve_leaves` read a vault and assert against what is in it —
+which used to mean the real vault, and now means
+[`tests/fixtures/vault`](tests/fixtures/vault) unless you pass `--real-vault`. The
+fixture reproduces this vault's *shapes* rather than its contents: an H1-wrapped note
+and an unwrapped one, a note carrying the same leaf heading under two parents and
+another carrying the same full path twice, a flat-list note of twelve unrelated
+bullets, a note long enough to chunk six ways, identifier-dense notes, generated
+series under `Workflows/` and `Reports/` that must stay out of the index, and three
+PDFs under `Files/` for the document work.
+
+`primitives` asserts POSIX file modes and symlink refusal, so three of its checks fail
+on Windows for want of privileges rather than for want of correctness. It passes on
+Linux and in CI.
+
+### Retrieval relevance
+
+```bash
+python -m tests.relevance.eval                       # fixture, offline, deterministic
+python -m tests.relevance.eval --update-baseline     # record a deliberate change
+python -m tests.relevance.eval --vault /media/Share/Vault \
+    --queries tests/relevance/private.json --embedder ollama
+```
+
+Recall@k, MRR and per-note concentration over a committed query set, compared against
+a committed baseline: a query that hit at rank 3 may not start missing, and an
+improvement is reported rather than failed. This is the harness the measured claims in
+[Why](#why) belong in, and the gate for any later change to `SPARSE_WEIGHT`,
+`LOOKUP_MAX_MATCHES`, the tokeniser or the chunker.
+
+It runs without Ollama by hashing tokens into `EMBED_DIMS` buckets for the dense arm —
+deterministic on every machine, and honest about what that costs: the stub has no
+semantics, so queries needing them are tagged `dense` and reported without being
+scored. What the fixture run does measure is the lexical arm, the tokeniser, the
+fusion, the lookup override and single-source concentration. The real vault and the
+real embedder are a local run against a query set that stays out of git, because the
+queries name real accounts — see
+[`tests/relevance/private.example.json`](tests/relevance/private.example.json).
 
 `tests.rest` drives the REST surface through the real app — the structured read, the
 frontmatter `PATCH` that is the claim in claim-before-act and the `delete` that removes a

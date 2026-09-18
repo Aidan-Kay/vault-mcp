@@ -1,0 +1,70 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 502 >>
+stream
+BT
+/F1 11 Tf
+14 TL
+72 760 Td
+(KESTREL ENERGY LIMITED) Tj
+T*
+(Contract confirmation) Tj
+T*
+() Tj
+T*
+(Account number: KE-8842071) Tj
+T*
+(Supply address: 14 Ashcroft Lane) Tj
+T*
+(MPAN: 1900012345678) Tj
+T*
+() Tj
+T*
+(Tariff: Kestrel Fixed 24) Tj
+T*
+(Unit rate: 21.94p per kWh) Tj
+T*
+(Standing charge: 41.12p per day) Tj
+T*
+(Supply start date: 19 September 2026) Tj
+T*
+(Fixed until: 19 September 2028) Tj
+T*
+(Exit fee: 75.00 per fuel) Tj
+T*
+() Tj
+T*
+(Your cooling off period ends 01 October 2026.) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+6 0 obj
+<< /Title (Kestrel Energy - Contract Confirmation) /Producer (vault-mcp fixture) >>
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000000793 00000 n 
+0000000890 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R /Info 6 0 R >>
+startxref
+989
+%%EOF

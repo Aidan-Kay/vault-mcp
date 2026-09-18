@@ -1,0 +1,324 @@
+{
+  "meta": {
+    "corpus": "tests/fixtures/vault",
+    "note": "Expected paths are vault-relative. A query hits when ANY path in `expect` appears in the top k. `never` lists paths that must not appear at all, which is how the SEARCH_EXCLUDE_DIRS decoys are asserted. `arm` says which retrieval arm is supposed to answer: lexical and either are scored, dense is informational under the hashing embedder, threshold is informational until a score floor exists.",
+    "arms": {
+      "lexical": "BM25 should answer this outright - an exact identifier",
+      "dense": "needs real semantics; informational under the hashing embedder",
+      "either": "ordinary wording that overlaps the note's own vocabulary",
+      "threshold": "should ideally return nothing; informational until a score floor exists"
+    }
+  },
+  "queries": [
+    {
+      "q": "KE-8842071",
+      "arm": "lexical",
+      "expect": [
+        "Home/Utilities/Electricity.md"
+      ],
+      "never": [
+        "Workflows/Email Triage/Email Triage.md"
+      ],
+      "why": "Account number. The Workflows decoy carries the same string and is excluded from the index, so a hit there means SEARCH_EXCLUDE_DIRS stopped working."
+    },
+    {
+      "q": "1900012345678",
+      "arm": "lexical",
+      "expect": [
+        "Home/Utilities/Electricity.md"
+      ],
+      "never": [
+        "Workflows/Email Triage/Email Triage.md",
+        "Reports/Vault Maintenance/2026-09-01 Vault Maintenance.md"
+      ],
+      "why": "MPAN. Both decoys carry it."
+    },
+    {
+      "q": "VEH-88412",
+      "arm": "lexical",
+      "expect": [
+        "Home/Insurance/Car Insurance.md",
+        "Personal/Vehicles/Vantor T60.md"
+      ],
+      "never": [
+        "Reports/Vault Maintenance/2026-09-01 Vault Maintenance.md"
+      ],
+      "why": "An insurer's internal vehicle reference, held by two notes, either of which is a correct answer. Replaced a registration plate: valid-format plates are cheap to look up, and the lookup test needs a near-unique token rather than a real one."
+    },
+    {
+      "q": "HM-4471902-C",
+      "arm": "lexical",
+      "expect": [
+        "Home/Insurance/Home Insurance.md"
+      ],
+      "never": [
+        "Reports/Vault Maintenance/2026-09-01 Vault Maintenance.md"
+      ],
+      "why": "Policy number."
+    },
+    {
+      "q": "235/45 R18",
+      "arm": "lexical",
+      "expect": [
+        "Personal/Vehicles/Vantor T60.md"
+      ],
+      "why": "Tyre size, unique in the corpus and sitting in the middle of the long note rather than near its top - so this is the case where the right chunk is not the note's first chunk. Replaced a VIN."
+    },
+    {
+      "q": "T4204X14-889201",
+      "arm": "lexical",
+      "expect": [
+        "Personal/Vehicles/Vantor T60.md"
+      ],
+      "why": "Engine number, hyphenated - the tokeniser splits it and both halves are still near-unique."
+    },
+    {
+      "q": "Calderon Optima 832",
+      "arm": "lexical",
+      "expect": [
+        "Home/Boiler.md"
+      ],
+      "never": [
+        "Reports/Vault Maintenance/2026-09-01 Vault Maintenance.md"
+      ],
+      "why": "Model number as a phrase rather than a single token."
+    },
+    {
+      "q": "OpenTherm gateway",
+      "arm": "lexical",
+      "expect": [
+        "Tech/Home Assistant.md"
+      ],
+      "why": "Distinctive term in the note with no H1 wrapper, whose chunks therefore carry a shorter breadcrumb than every other note's. Replaced a passport number: a fixture does not need a document identifier to prove anything, and one sitting in a public repo is an invitation to a scanner."
+    },
+    {
+      "q": "FB-40028871",
+      "arm": "lexical",
+      "expect": [
+        "Home/Mortgage/Mortgage — Ferrington.md"
+      ],
+      "why": "Mortgage account number, and the one expected path whose filename carries an em dash."
+    },
+    {
+      "q": "Crownbond",
+      "arm": "lexical",
+      "expect": [
+        "Finance/Accounts/Savings.md"
+      ],
+      "why": "An invented product name, near-unique corpus-wide, which is what _is_lookup keys on. Replaced a bond holder number."
+    },
+    {
+      "q": "RK-99182374",
+      "arm": "lexical",
+      "expect": [
+        "Home/Insurance/Car Insurance.md"
+      ],
+      "why": "Policy number."
+    },
+    {
+      "q": "NX8010-4471290",
+      "arm": "lexical",
+      "expect": [
+        "Home/Utilities/Broadband.md"
+      ],
+      "why": "ONT serial."
+    },
+    {
+      "q": "E12N4471088",
+      "arm": "lexical",
+      "expect": [
+        "Home/Utilities/Electricity.md"
+      ],
+      "why": "Meter serial."
+    },
+    {
+      "q": "8841200733",
+      "arm": "lexical",
+      "expect": [
+        "Home/Utilities/Gas.md"
+      ],
+      "why": "MPRN. Distinguishes the gas note from the electricity one, which is its near-duplicate in shape and vocabulary."
+    },
+    {
+      "q": "44-90218",
+      "arm": "lexical",
+      "expect": [
+        "Personal/Aidan/Health/Dentist.md"
+      ],
+      "why": "Patient number."
+    },
+    {
+      "q": "nomic",
+      "arm": "lexical",
+      "expect": [
+        "Tech/Ollama.md"
+      ],
+      "why": "The tokeniser decision itself: the corpus only ever writes nomic-embed-text, and splitting on the hyphen is what makes this query hit."
+    },
+    {
+      "q": "10.0.4.12",
+      "arm": "lexical",
+      "expect": [
+        "Tech/NAS.md",
+        "Tech/Linux Server/Networking.md"
+      ],
+      "why": "An address held in two notes. Tokenises to four numeric pieces, several of which are not unique, so it is the identifier query most likely to go wrong."
+    },
+    {
+      "q": "readings",
+      "arm": "lexical",
+      "expect": [
+        "Home/Utilities/Water.md"
+      ],
+      "why": "Item 4, stemming. The water note only ever writes 'reading', so this misses today and should hit once the lexical arm stems."
+    },
+    {
+      "q": "renewing",
+      "arm": "lexical",
+      "expect": [
+        "Home/Utilities/Gas.md",
+        "Home/Insurance/Car Insurance.md",
+        "Home/Insurance/Home Insurance.md"
+      ],
+      "why": "Item 4, stemming. The corpus writes renewal and renewals, never renewing."
+    },
+    {
+      "q": "cambelt due",
+      "arm": "either",
+      "expect": [
+        "Personal/Vehicles/Vantor T60.md"
+      ],
+      "why": "Ordinary wording, answered by a section deep in a long note."
+    },
+    {
+      "q": "escape of water claim",
+      "arm": "either",
+      "expect": [
+        "Home/Insurance/Home Insurance.md"
+      ],
+      "why": "Insurance phrasing that appears verbatim, against a corpus with a Water note that shares a term."
+    },
+    {
+      "q": "static IP",
+      "arm": "either",
+      "expect": [
+        "Home/Utilities/Broadband.md",
+        "Tech/Linux Server/Networking.md"
+      ],
+      "why": "Two notes answer it."
+    },
+    {
+      "q": "gutter overflows above the back door",
+      "arm": "either",
+      "expect": [
+        "Home/House Log.md"
+      ],
+      "why": "Item 5, flat-list chunking. One bullet of twelve unrelated ones - today its signal is averaged with the other eleven."
+    },
+    {
+      "q": "smoke alarm battery",
+      "arm": "either",
+      "expect": [
+        "Home/House Log.md"
+      ],
+      "why": "Item 5. A second bullet of the same list, so the two queries compete for the same chunk today and should resolve to different chunks after."
+    },
+    {
+      "q": "tyre pressures",
+      "arm": "either",
+      "expect": [
+        "Personal/Vehicles/Vantor T60.md"
+      ],
+      "why": "Mid-note section of the long note."
+    },
+    {
+      "q": "ZFS snapshot retention",
+      "arm": "either",
+      "expect": [
+        "Tech/Linux Server/Linux Server.md"
+      ],
+      "why": "Should prefer the server note over the two other notes with a Backups heading."
+    },
+    {
+      "q": "Backups",
+      "arm": "either",
+      "expect": [
+        "Tech/Linux Server/Linux Server.md",
+        "Tech/Linux Server/Docker.md",
+        "Tech/NAS.md"
+      ],
+      "why": "Genuinely ambiguous across three notes. Watch max_per_path rather than rank: a good result set here holds all three, and item 1 is what makes that happen."
+    },
+    {
+      "q": "Vantor T60",
+      "arm": "either",
+      "expect": [
+        "Personal/Vehicles/Vantor T60.md"
+      ],
+      "why": "Single-source dominance, measured rather than asserted. Every chunk of a six-section note matches, so max_per_path is the number that should fall when item 1 lands."
+    },
+    {
+      "q": "energy tariff unit rate",
+      "arm": "either",
+      "expect": [
+        "Home/Utilities/Electricity.md",
+        "Home/Utilities/Gas.md"
+      ],
+      "why": "Two near-duplicate notes, so this is where diversification should surface both rather than four chunks of one."
+    },
+    {
+      "q": "how much do we pay for electricity per unit",
+      "arm": "dense",
+      "expect": [
+        "Home/Utilities/Electricity.md"
+      ],
+      "why": "Natural-language phrasing; 'pay' and 'per unit' overlap the note only loosely."
+    },
+    {
+      "q": "when does the car insurance renew",
+      "arm": "dense",
+      "expect": [
+        "Home/Insurance/Car Insurance.md"
+      ],
+      "why": "Question form."
+    },
+    {
+      "q": "what happens to the server backups overnight",
+      "arm": "dense",
+      "expect": [
+        "Tech/Linux Server/Linux Server.md"
+      ],
+      "why": "The corpus says nightly, not overnight."
+    },
+    {
+      "q": "where is the water meter",
+      "arm": "dense",
+      "expect": [
+        "Home/Utilities/Water.md"
+      ],
+      "why": "Answered by a parenthetical rather than a heading."
+    },
+    {
+      "q": "what has gone wrong with the car",
+      "arm": "dense",
+      "expect": [
+        "Personal/Vehicles/Vantor T60.md"
+      ],
+      "why": "The note says faults and fixes, never 'gone wrong'."
+    },
+    {
+      "q": "what do we spend on subscriptions each month",
+      "arm": "dense",
+      "expect": [
+        "Finance/Subscriptions.md"
+      ],
+      "why": "Flat-list note reached by a summarising question."
+    },
+    {
+      "q": "Marrowby Energy solar export tariff",
+      "arm": "threshold",
+      "expect": [],
+      "why": "Nothing in the corpus answers this. Today five chunks come back regardless; a score floor is what would make the answer an empty list."
+    }
+  ]
+}

@@ -1,0 +1,132 @@
+{
+  "k": 5,
+  "vault": "vault",
+  "embedder": "hashing",
+  "queries_file": "queries.json",
+  "aggregate": {
+    "scored_queries": 29,
+    "hits": 27,
+    "recall": 0.931,
+    "mrr": 0.8966,
+    "mean_max_per_path": 1.414,
+    "worst_max_per_path": 4
+  },
+  "queries": {
+    "KE-8842071": {
+      "rank": 1,
+      "max_per_path": 1
+    },
+    "1900012345678": {
+      "rank": 1,
+      "max_per_path": 1
+    },
+    "VEH-88412": {
+      "rank": 1,
+      "max_per_path": 2
+    },
+    "HM-4471902-C": {
+      "rank": 1,
+      "max_per_path": 1
+    },
+    "235/45 R18": {
+      "rank": 1,
+      "max_per_path": 1
+    },
+    "T4204X14-889201": {
+      "rank": 1,
+      "max_per_path": 2
+    },
+    "Calderon Optima 832": {
+      "rank": 1,
+      "max_per_path": 1
+    },
+    "OpenTherm gateway": {
+      "rank": 1,
+      "max_per_path": 1
+    },
+    "FB-40028871": {
+      "rank": 1,
+      "max_per_path": 1
+    },
+    "Crownbond": {
+      "rank": 1,
+      "max_per_path": 1
+    },
+    "RK-99182374": {
+      "rank": 1,
+      "max_per_path": 2
+    },
+    "NX8010-4471290": {
+      "rank": 1,
+      "max_per_path": 2
+    },
+    "E12N4471088": {
+      "rank": 1,
+      "max_per_path": 1
+    },
+    "8841200733": {
+      "rank": 1,
+      "max_per_path": 1
+    },
+    "44-90218": {
+      "rank": 1,
+      "max_per_path": 1
+    },
+    "nomic": {
+      "rank": 1,
+      "max_per_path": 1
+    },
+    "10.0.4.12": {
+      "rank": 1,
+      "max_per_path": 1
+    },
+    "readings": {
+      "rank": null,
+      "max_per_path": 1
+    },
+    "renewing": {
+      "rank": null,
+      "max_per_path": 1
+    },
+    "cambelt due": {
+      "rank": 1,
+      "max_per_path": 2
+    },
+    "escape of water claim": {
+      "rank": 1,
+      "max_per_path": 1
+    },
+    "static IP": {
+      "rank": 1,
+      "max_per_path": 1
+    },
+    "gutter overflows above the back door": {
+      "rank": 2,
+      "max_per_path": 1
+    },
+    "smoke alarm battery": {
+      "rank": 1,
+      "max_per_path": 1
+    },
+    "tyre pressures": {
+      "rank": 1,
+      "max_per_path": 2
+    },
+    "ZFS snapshot retention": {
+      "rank": 2,
+      "max_per_path": 2
+    },
+    "Backups": {
+      "rank": 1,
+      "max_per_path": 2
+    },
+    "Vantor T60": {
+      "rank": 1,
+      "max_per_path": 4
+    },
+    "energy tariff unit rate": {
+      "rank": 1,
+      "max_per_path": 2
+    }
+  }
+}

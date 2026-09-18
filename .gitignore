@@ -1,3 +1,9 @@
 __pycache__/
 *.pyc
 .venv/
+
+# Query sets and baselines measured against the real vault. The queries name real
+# accounts, policies and registrations, so they stay local by construction -
+# tests/relevance/eval.py takes --queries and --baseline for exactly this reason.
+tests/relevance/private*.json
+!tests/relevance/private.example.json

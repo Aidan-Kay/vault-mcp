@@ -1,0 +1,44 @@
+name: tests
+
+# The suite has to be runnable by something other than the person who wrote it,
+# which means no mounted vault, no Ollama and no secrets. Everything here runs
+# against the committed fixture with the hashing embedder; the real vault and the
+# real embedder are a local run, deliberately.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Suite
+        run: python -m tests.run --quiet
+
+      # Run again with the real numbers visible. The step above fails the build;
+      # this one is what you read when it does, and it costs half a second.
+      - name: Relevance, in full
+        if: always()
+        run: python -m tests.relevance.eval
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The Dockerfile clones this repo rather than copying the checkout, so this
+      # asserts the image builds - not that it builds *this* commit. Worth having
+      # anyway: it catches a broken requirements pin or a missing LICENSE, which
+      # are the two things that have any chance of breaking it.
+      - run: docker build -t vault-mcp:ci .

@@ -1,0 +1,20 @@
+{
+  "meta": {
+    "corpus": "the real vault",
+    "note": "Copy to private.json (gitignored), replace these with queries naming real identifiers, and run:\n\n    python -m tests.relevance.eval --vault /media/Share/Vault --queries tests/relevance/private.json --baseline tests/relevance/private.baseline.private.json --embedder ollama\n\nThis is where the README's measured claims belong - 'dense retrieval scores 0/40 on exact identifiers where BM25 scores 40/40' is a sentence today and should be a run. Forty identifier queries against the real corpus is what makes it one.\n\nKeep one baseline per corpus: a rank measured against the fixture with the hashing embedder is not comparable to one measured here, and eval.py refuses to compare across either."
+  },
+  "queries": [
+    {
+      "q": "<a registration, policy number or account number from the real vault>",
+      "arm": "lexical",
+      "expect": ["<the note that holds it>"],
+      "why": "The claim worth re-running: exact identifiers are the lexical arm's job and the dense arm cannot do them."
+    },
+    {
+      "q": "<a question phrased the way you would actually ask it>",
+      "arm": "dense",
+      "expect": ["<the note that answers it>"],
+      "why": "Only meaningful with --embedder ollama; the hashing embedder has no semantics."
+    }
+  ]
+}

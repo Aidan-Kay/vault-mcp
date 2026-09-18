@@ -1,0 +1,15 @@
+# The fixture PDFs are hand-built, uncompressed and pure ASCII - they contain no
+# NUL byte, so git's heuristic reads them as text. With core.autocrlf=true on
+# Windows a checkout would then rewrite their line endings, and a PDF's xref
+# table is a list of byte offsets, so every one of them would be wrong. Marking
+# them binary is what keeps a clone of this repo byte-identical to the commit.
+#
+# The suffixes beyond .pdf are here for Phase 2 rather than for anything present
+# today, and mirror the list the vault's own .gitattributes needs.
+*.pdf binary
+*.docx binary
+*.pptx binary
+*.xlsx binary
+*.doc binary
+*.xls binary
+*.heic binary
