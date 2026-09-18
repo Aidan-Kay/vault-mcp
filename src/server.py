@@ -28,6 +28,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
+from . import callouts
 from . import maintenance
 from . import operations
 from . import search as search_module
@@ -731,6 +732,38 @@ async def maintenance_endpoint(request: Request) -> JSONResponse:
     return VaultJSON(result)
 
 
+async def callouts_endpoint(request: Request) -> JSONResponse:
+    """Extract every open callout in the vault: /callouts
+
+    Read-only, and a sibling of /maintenance rather than one of its checks:
+    that route asks whether the vault is well-formed, this one asks what it is
+    still carrying. n8n calls it, hands the list to Lyra, and Lyra raises what
+    is outstanding. See src/callouts.py for why it runs here and why it takes
+    no parameters.
+
+    Answers 200 with however many callouts were found, including none - an
+    empty list is a real answer about a vault with nothing open. Only the
+    extractor failing to run is a 500, which is what lets the caller branch on
+    "the list is missing" without inspecting it.
+    """
+    log.info("extracting the vault callouts")
+    try:
+        result = await asyncio.to_thread(callouts.run)
+    except callouts.ExtractionError as exc:
+        log.error("callout extraction failed: %s", exc)
+        return VaultJSON({"error": f"the callout extraction failed: {exc}"}, status_code=500)
+    except Exception as exc:  # noqa: BLE001 - the route must not 502 silently
+        log.exception("callout extraction failed")
+        return VaultJSON({"error": f"the callout extraction failed: {exc}"}, status_code=500)
+    log.info(
+        "extracted %d callouts from %d notes in %d ms",
+        result["counts"]["callouts"],
+        result["counts"]["notes_with_callouts"],
+        result["duration_ms"],
+    )
+    return VaultJSON(result)
+
+
 rest_app = Starlette(
     routes=[
         Route(
@@ -742,11 +775,12 @@ rest_app = Starlette(
         # GET because it changes nothing; POST too, so a caller that only
         # sends POSTs does not need a special case.
         Route("/maintenance", maintenance_endpoint, methods=["GET", "POST"]),
+        Route("/callouts", callouts_endpoint, methods=["GET", "POST"]),
     ]
 )
 
 
-REST_PREFIXES = ("/vault", "/frontmatter", "/maintenance")
+REST_PREFIXES = ("/vault", "/frontmatter", "/maintenance", "/callouts")
 
 
 class VaultRoutes:
@@ -872,7 +906,7 @@ def main() -> None:
         settings.port,
         settings.host,
         settings.port,
-        "{/vault/<path>,/frontmatter,/maintenance}",
+        "{/vault/<path>,/frontmatter,/maintenance,/callouts}",
         ", ".join(settings.allowed_hosts),
     )
     uvicorn.run(app, host=settings.host, port=settings.port, log_level="info", access_log=False)

@@ -50,6 +50,8 @@ the URL and the auth header rather than a rewrite into JSON-RPC.
 | `PATCH /vault/<path>` | `Target:` a heading, or a frontmatter key with `Target-Type: frontmatter`, or the prose with `Target-Type: body`. `Operation: delete` removes a frontmatter key. |
 | `DELETE /vault/<path>` | Remove the note |
 | `GET /frontmatter?key=&value=` | Notes whose field holds that exact value, as `[{"filename": …}]`. `&dir=` narrows the walk to one folder. |
+| `GET /maintenance` | Runs the vault's eight checkers and answers what each printed, as JSON and as one markdown block. |
+| `GET /callouts` | Every open callout in the vault, as JSON: one object per callout with its note, line, type, severity, title and body. |
 
 On the structured read, `content` is the file byte for byte and `body` is the same text
 with the frontmatter block removed — so a caller wanting the prose does not carry its
@@ -63,6 +65,16 @@ YAML would change what every comparison downstream sees. Removing a field is
 there is no text that reads back as one. A `Target-Type: body` `PATCH`
 replaces the prose and leaves the frontmatter block exactly as it was, for notes whose
 text is regenerated on a schedule but whose metadata is written once.
+
+`/maintenance` and `/callouts` are the two read-only routes that touch no note. Both
+run a stdlib script out of the vault's own `.scripts/`, because n8n's container has
+neither Python nor the vault mounted and this one has both. Both take no parameters —
+every argv is a constant here, so nothing a caller sends can reach a command line — and
+both accept `POST` as well as `GET`, so a workflow that only sends `POST`s needs no
+special case. `/maintenance` asks whether the vault is well-formed; `/callouts` asks what
+it is still carrying, and hands back the list a workflow raises from. Findings are a 200,
+however many there are: only the run failing outright is a 500, which is what lets a
+workflow branch on "the report is missing" without parsing it.
 
 `/frontmatter` walks the filesystem and never the semantic index — `Workflows/` is
 in `SEARCH_EXCLUDE_DIRS` and so is absent from search entirely, which is exactly
@@ -225,8 +237,9 @@ one; the first three read the real vault, so they need it mounted.
 
 `tests.rest` drives the REST surface through the real app — the structured read, the
 frontmatter `PATCH` that is the claim in claim-before-act and the `delete` that removes a
-field, the body `PATCH` that leaves the block alone, the frontmatter query, and that a
-missing note is a 404 where a refused one is a 400. `tests.indexdoc` covers the generated document: coverage, folder-derived
+field, the body `PATCH` that leaves the block alone, the frontmatter query, that a
+missing note is a 404 where a refused one is a 400, and that `/maintenance` and
+`/callouts` build their argv from constants whatever the query string says. `tests.indexdoc` covers the generated document: coverage, folder-derived
 headings, incremental updates on create, edit, move and delete, that `index.md` is
 refused to every writer and still readable, and that an edit changing nothing the index
 displays does not rewrite it. `tests.primitives` covers the write traps that are silent

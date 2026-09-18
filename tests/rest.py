@@ -40,6 +40,7 @@ os.environ["VAULT_PATH"] = str(_VAULT)
 
 import httpx  # noqa: E402
 
+from src import callouts  # noqa: E402
 from src import maintenance  # noqa: E402
 from src.server import app  # noqa: E402
 
@@ -614,6 +615,31 @@ def test_maintenance() -> None:
     )
 
 
+# --------------------------------------------------------------------------
+# 2.7  /callouts
+#
+# The fixture vault has no .scripts/ either, so the extractor cannot run and
+# the route must say so in the one way the workflow can branch on: a 500 with
+# a message, not a 200 carrying an empty list. The two are not the same answer
+# - an empty list means the vault has nothing open, and a run that never
+# happened must never be read as a clean one.
+# --------------------------------------------------------------------------
+
+
+def test_callouts() -> None:
+    got = call("GET", "/callouts")
+    check("an extractor that is not there is a 500", got.status_code, 500)
+    check_in("and the error says which script", callouts.SCRIPT, got.json()["error"])
+    check_in("and where it looked", ".scripts", got.json()["error"])
+
+    # POST is accepted for the same reason /maintenance accepts it, and the
+    # script's own filters are not exposed - the argv is built from the
+    # constants in src/callouts.py and nothing else.
+    posted = call("POST", "/callouts?type=warning&path=;id")
+    check("POST is accepted too", posted.status_code, 500)
+    check_in("and a query parameter changes nothing", callouts.SCRIPT, posted.json()["error"])
+
+
 async def _unauthenticated() -> int:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://vault-mcp:8080") as c:
@@ -627,6 +653,7 @@ def main() -> int:
     test_status_codes()
     test_body_patch()
     test_maintenance()
+    test_callouts()
     if report():
         return 1
     print("rest: all checks passed")
