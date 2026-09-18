@@ -1,8 +1,8 @@
 """Run the vault's own maintenance checkers and return what they printed.
 
-The seven scripts in `.scripts/` are the vault's integrity tests - links,
+The eight scripts in `.scripts/` are the vault's integrity tests - links,
 frontmatter, index coverage, encoding hygiene, generated-series gaps, expiry
-dates and unaddressable headings. They are stdlib-only Python 3 and already sit
+dates, unaddressable headings and callout conformance. They are stdlib-only Python 3 and already sit
 inside the mount at `/vault/.scripts/`, so this container is the one place that
 can run them unchanged, on a schedule, with no second copy to keep in step.
 
@@ -97,6 +97,14 @@ CHECKS: tuple[Check, ...] = (
         "Unaddressable duplicate headings",
         "a note repeats a full heading path, so that section cannot be patched",
     ),
+    Check(
+        "check_callouts.py",
+        "Callout conformance",
+        "a blockquote has no type, carries a type outside the allowed five, or "
+        "a callouts opt-out cannot be honoured - each one drops its contents "
+        "out of the callout sweep; wrong-case types and missing titles are "
+        "warnings and still exit 0",
+    ),
 )
 
 
@@ -131,7 +139,7 @@ def _run(check: Check, scripts_dir: Path, vault_path: Path) -> dict:
 
     if not script_path.is_file():
         # Reported rather than raised: one missing script should not cost the
-        # other six their run, and "it is not there" is itself a finding.
+        # others their run, and "it is not there" is itself a finding.
         result |= {"exit_code": None, "stdout": "", "stderr": "",
                    "duration_ms": 0, "error": f"not found at {script_path}"}
         return result

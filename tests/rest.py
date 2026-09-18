@@ -574,7 +574,7 @@ def test_body_patch() -> None:
 #
 # The fixture vault has no .scripts/, and that is the point: every checker
 # reports itself missing, which exercises the shape of the answer and the
-# not-found branch without running seven real walks over a temp directory.
+# not-found branch without running eight real walks over a temp directory.
 #
 # The assertion that matters is the status code. A vault full of findings must
 # still be a 200 - the caller branches on "did the suite run", and a route that
@@ -590,7 +590,7 @@ def test_maintenance() -> None:
     body = got.json()
     check("one entry per checker", len(body["checks"]), len(maintenance.CHECKS))
     check("none of them exited zero", body["summary"]["exit_zero"], 0)
-    check("all seven are reported as errored", body["summary"]["errored"], len(maintenance.CHECKS))
+    check("all of them are reported as errored", body["summary"]["errored"], len(maintenance.CHECKS))
 
     # The markdown rendering is what the workflow actually puts under its
     # prompt, so a run that produced no findings must still produce a block.
