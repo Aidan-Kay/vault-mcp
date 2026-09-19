@@ -1,9 +1,22 @@
-"""Batched embedding against Ollama, with L2 normalisation on receipt."""
+"""Batched embedding against Ollama, with L2 normalisation on receipt.
+
+Retried with exponential backoff, because the failures this sees are nearly all
+timing. The first call after an idle period races a model load when
+OLLAMA_KEEP_ALIVE is unset; a restarted Ollama refuses connections for a second
+or two; a cold build asks for thirty-five batches in a row and only needs one of
+them to land badly. One fixed 2s retry covered the first of those and nothing
+else.
+
+What it does *not* retry is the other half of the same decision, and the more
+useful half: a 4xx that is not a timing answer is a statement about the request,
+and the request will be identical next time.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 import httpx
 import numpy as np
@@ -13,6 +26,42 @@ from .config import settings
 log = logging.getLogger(__name__)
 
 QUERY_PREFIX = "search_query: "
+
+# Status codes worth trying again. Everything 5xx is the endpoint failing to do
+# something it agreed to; 429 is it asking us to wait; 408 and 425 are the two
+# timing answers that are not a refusal. Every other 4xx is a statement about the
+# request, and the request will be identical next time.
+RETRYABLE_STATUS = frozenset({408, 425, 429})
+
+
+def _retryable(exc: Exception) -> bool:
+    """Whether trying the same call again could plausibly answer differently.
+
+    A retry budget spent on a permanent error is worse than no budget at all: it
+    turns "nomic-embed-text is not pulled" from an error into a wait, and the log
+    line that says so arrives after the operator has gone looking elsewhere.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        return status >= 500 or status in RETRYABLE_STATUS
+    # A transport error, a timeout, or a body that did not parse - which is what
+    # a truncated response from a proxy looks like from here. All transient
+    # shapes, so all retried.
+    return True
+
+
+def _describe(exc: Exception | None) -> str:
+    """One line, with the status code on it when there is one.
+
+    httpx's own str() for a status error is three lines of URL and a link to its
+    documentation, which is not what belongs in a log this is read from.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        body = exc.response.text.strip().replace("\n", " ")
+        return f"HTTP {exc.response.status_code} from {exc.request.url}: {body[:200]}"
+    if exc is None:
+        return "no error recorded"
+    return f"{type(exc).__name__}: {exc}"
 
 
 def l2_normalise(matrix: np.ndarray) -> np.ndarray:
@@ -34,23 +83,43 @@ class Embedder:
         payload = {"model": settings.embed_model, "input": inputs}
         url = f"{settings.ollama_url}/embeddings"
 
+        attempts = max(1, settings.embed_max_attempts)
+        started = time.monotonic()
         last_error: Exception | None = None
-        for attempt in range(2):
+
+        for attempt in range(attempts):
             try:
                 response = await self._client.post(url, json=payload)
                 response.raise_for_status()
                 data = response.json()["data"]
                 # OpenAI-compatible responses carry an index; do not trust order.
                 data.sort(key=lambda row: row.get("index", 0))
+                if attempt:
+                    log.info("embed batch succeeded on attempt %d", attempt + 1)
                 return [row["embedding"] for row in data]
             except (httpx.HTTPError, KeyError, ValueError) as exc:
                 last_error = exc
-                if attempt == 0:
-                    # The first call after an idle period can race a model load
-                    # when OLLAMA_KEEP_ALIVE is unset.
-                    log.warning("embed batch failed (%s), retrying once", exc)
-                    await asyncio.sleep(2.0)
-        raise RuntimeError(f"embedding failed after retry: {last_error}") from last_error
+                if not _retryable(exc):
+                    # A 404 for a model nobody pulled will be a 404 in thirty
+                    # seconds too, and spending the whole budget on it turns a
+                    # clear message into a slow one.
+                    raise RuntimeError(f"embedding failed: {_describe(exc)}") from exc
+                if attempt == attempts - 1:
+                    break
+                delay = min(
+                    settings.embed_backoff_max_seconds,
+                    settings.embed_backoff_seconds * 2**attempt,
+                )
+                log.warning(
+                    "embed batch failed (%s); attempt %d of %d, retrying in %.1fs",
+                    _describe(exc), attempt + 1, attempts, delay,
+                )
+                await asyncio.sleep(delay)
+
+        raise RuntimeError(
+            f"embedding failed after {attempts} attempt(s) over "
+            f"{time.monotonic() - started:.1f}s: {_describe(last_error)}"
+        ) from last_error
 
     async def embed(self, texts: list[str]) -> np.ndarray:
         """Embed pre-scaffolded texts. Returns an (N, dims) normalised float32 array."""

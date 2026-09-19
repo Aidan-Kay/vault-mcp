@@ -46,6 +46,27 @@ def _float(name: str, default: float) -> float:
         raise RuntimeError(f"{name} must be a number, got {raw!r}") from exc
 
 
+def _cache_path() -> Path | None:
+    """Where the index cache lives, or None when it is switched off.
+
+    Unset is not the same as empty. Unset takes the XDG default, which exists and
+    is writable in the container (appuser has a home) and on a development
+    machine alike, so persistence needs no volume to start working. Set to the
+    empty string it is off, which is the documented way to say "do not write my
+    vault's text anywhere but the vault".
+
+    Deliberately never inside the vault. A cache written there would trip the
+    watcher, land in somebody's Obsidian and, on the first pass, index itself.
+    """
+    raw = os.environ.get("INDEX_CACHE_PATH")
+    if raw is None:
+        base = os.environ.get("XDG_CACHE_HOME", "").strip()
+        root = Path(base) if base else Path.home() / ".cache"
+        return root / "vault-mcp" / "index.npz"
+    raw = raw.strip()
+    return Path(raw).expanduser() if raw else None
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     vault_path: Path
@@ -64,6 +85,11 @@ class Settings:
     search_default_k: int
     embed_batch_size: int
     embed_dims: int
+    embed_max_attempts: int
+    embed_backoff_seconds: float
+    embed_backoff_max_seconds: float
+    index_cache_path: Path | None
+    index_cache_flush_seconds: float
     watch_debounce_seconds: float
     index_reconcile_seconds: float
     host: str
@@ -136,6 +162,19 @@ def load() -> Settings:
         search_default_k=_int("SEARCH_DEFAULT_K", 6),
         embed_batch_size=_int("EMBED_BATCH_SIZE", 64),
         embed_dims=_int("EMBED_DIMS", 768),
+        # Retry budget for one batch of embeddings. Five attempts at a doubling
+        # 1s backoff is about 15 seconds of patience, which covers a model load,
+        # a container restart and a mount stall without turning a genuine outage
+        # into a build that hangs. 1 disables retrying entirely.
+        embed_max_attempts=_int("EMBED_MAX_ATTEMPTS", 5),
+        embed_backoff_seconds=_float("EMBED_BACKOFF_SECONDS", 1.0),
+        embed_backoff_max_seconds=_float("EMBED_BACKOFF_MAX_SECONDS", 30.0),
+        # The chunk-and-vector cache. Unset takes the XDG default; empty is off.
+        index_cache_path=_cache_path(),
+        # How often a cache made dirty by an incremental reindex is written back.
+        # Not per change: a save is the whole file, and Obsidian's autosave can
+        # produce an edit every few seconds. 0 writes only at build and shutdown.
+        index_cache_flush_seconds=_float("INDEX_CACHE_FLUSH_SECONDS", 60.0),
         watch_debounce_seconds=_float("WATCH_DEBOUNCE_SECONDS", 2.0),
         # index.md is otherwise only ever updated one note at a time, so an
         # event that never arrives costs a restart to notice rather than one

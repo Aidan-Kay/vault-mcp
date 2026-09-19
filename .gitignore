@@ -11,3 +11,7 @@ tests/relevance/private*.json
 # Planning and design notes - the comparison, the plan and its decision records.
 # Kept alongside the code rather than published with it.
 docs/
+
+# Written into the image by the Dockerfile so /readyz can name the build. A
+# checkout reads .git instead, so a committed one could only ever be stale.
+REVISION

@@ -121,6 +121,19 @@ class VaultWatcher:
         self._dir_task: asyncio.Task | None = None
         self._adopted: set[Path] = set()
 
+    @property
+    def running(self) -> bool:
+        """Whether events are still arriving, for /readyz to answer with.
+
+        The observer's thread is what delivers them, so a thread that has died -
+        and watchdog's does, on an OSError it cannot recover from - is a vault
+        that has silently stopped being watched. Nothing else notices: search
+        keeps answering from the index it has, and every answer is a little older
+        than the last. Asking the thread directly is the only honest form of the
+        question, since a queue with nothing in it looks the same either way.
+        """
+        return self._observer is not None and self._observer.is_alive()
+
     async def start(self) -> None:
         loop = asyncio.get_running_loop()
         self._observer = Observer()

@@ -38,6 +38,7 @@ from . import vault
 from .config import settings
 from .embedder import Embedder
 from .index import VaultIndex
+from .indexcache import IndexCache
 from .indexdoc import IndexDoc
 from .watcher import VaultWatcher
 
@@ -67,6 +68,17 @@ _indexdoc: IndexDoc = IndexDoc(entries={})
 _indexdoc_lock = asyncio.Lock()
 _indexdoc_ready = False
 
+# The chunk-and-vector cache, or None when INDEX_CACHE_PATH is empty. Opened once
+# in the lifespan and handed to every build; see indexcache.py.
+_cache: IndexCache | None = None
+
+# Held so /readyz can ask whether the watch thread is still alive. A watcher that
+# has died is the failure with no symptom - search keeps answering, from an index
+# that stopped being updated.
+_watcher: VaultWatcher | None = None
+
+_started_at: float = time.time()
+
 
 def _index_status() -> str:
     if _build_error:
@@ -82,11 +94,18 @@ async def _build_index() -> None:
     global _index, _build_error, _ready
     assert _embedder is not None
     try:
-        _index = await VaultIndex.build(_embedder)
+        async with _reindex_lock:
+            _index = await VaultIndex.build(_embedder, _cache)
         _ready = True
+        _build_error = None
     except Exception as exc:
         _build_error = str(exc)
         log.exception("index build failed")
+        return
+    # Written straight away rather than left to the timer: the build is when the
+    # cache changes most, and a container killed ten seconds later should not
+    # have to do all of that again.
+    await _flush_cache()
 
 
 async def _reindex(path: Path) -> None:
@@ -94,13 +113,48 @@ async def _reindex(path: Path) -> None:
     assert _embedder is not None
     async with _reindex_lock:  # serialise rebuilds; each reads the live index
         started = time.perf_counter()
-        _index = await _index.replace_note(_embedder, path)
+        _index = await _index.replace_note(_embedder, path, _cache)
         log.info(
             "reindex %s -> %d chunks in %.0f ms",
             vault.relpath(path),
             _index.size,
             (time.perf_counter() - started) * 1000,
         )
+
+
+async def _flush_cache() -> None:
+    """Write the index cache back, if there is one and it has changed.
+
+    Under the reindex lock, because save() walks the stores a build mutates and
+    runs in a worker thread where a dict changing size is a raised exception
+    rather than a torn read. In a thread because it serialises megabytes and
+    fsyncs them, which is not work to do on the loop that is serving searches.
+    """
+    if _cache is None:
+        return
+    async with _reindex_lock:
+        await asyncio.to_thread(_cache.save)
+
+
+async def _flush_index_cache_periodically() -> None:
+    """Persist a cache made dirty by incremental reindexing.
+
+    Not written per change. A save is the whole file, and Obsidian's autosave can
+    produce a settled edit every few seconds; at that rate the cache would cost
+    more than the rebuild it saves. 0 disables the timer, leaving the build and
+    the shutdown flush - which is the whole of it if the process is killed.
+    """
+    interval = settings.index_cache_flush_seconds
+    if _cache is None or interval <= 0:
+        return
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await _flush_cache()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("index cache flush failed")
 
 
 async def _scan_index_doc() -> None:
@@ -215,10 +269,11 @@ async def _on_change(path: Path) -> None:
 
 @asynccontextmanager
 async def lifespan(_server: MCPServer) -> AsyncIterator[None]:
-    global _embedder, _build_started
+    global _embedder, _build_started, _cache, _watcher
 
     log.info("vault=%s exclude=%s", vault.ROOT, sorted(settings.search_exclude_dirs))
     _embedder = Embedder()
+    _cache = IndexCache.open()
     _build_started = time.monotonic()
 
     # Built in the background so vault_read / vault_list / vault_map serve
@@ -226,22 +281,28 @@ async def lifespan(_server: MCPServer) -> AsyncIterator[None]:
     build_task = asyncio.create_task(_build_index(), name="index-build")
     scan_task = asyncio.create_task(_scan_index_doc(), name="indexdoc-scan")
     reconcile_task = asyncio.create_task(_reconcile_index_doc(), name="indexdoc-reconcile")
+    flush_task = asyncio.create_task(_flush_index_cache_periodically(), name="index-cache-flush")
 
     # Started straight away, no longer behind the embedding build. It used to
     # wait for it and give up if it failed, which was tolerable when search was
     # all it fed; now it also keeps index.md current, and that must not stop
     # because Ollama is down. _on_change skips the re-embed until _ready.
-    watcher = VaultWatcher(_on_change)
-    await watcher.start()
+    _watcher = VaultWatcher(_on_change)
+    await _watcher.start()
 
     try:
         yield
     finally:
-        for task in (reconcile_task, scan_task, build_task):
+        for task in (flush_task, reconcile_task, scan_task, build_task):
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
-        await watcher.stop()
+        await _watcher.stop()
+        # After the tasks are down, so nothing is still mutating the stores, and
+        # before the embedder closes, because a vector that arrived in the last
+        # minute is exactly the one this saves re-fetching.
+        with contextlib.suppress(Exception):
+            await _flush_cache()
         if _embedder is not None:
             await _embedder.aclose()
 
@@ -820,6 +881,139 @@ async def callouts_endpoint(request: Request) -> JSONResponse:
     return VaultJSON(result)
 
 
+# --------------------------------------------------------------------------
+# Liveness and readiness
+#
+# Two routes, because they answer two questions that must not be conflated. A
+# container marked unhealthy is a container something restarts, and restarting to
+# recover one broken subsystem takes out every working one with it - so liveness
+# has to mean "this process is serving", and nothing else.
+# --------------------------------------------------------------------------
+
+SOURCE_URL = "https://github.com/Aidan-Kay/vault-mcp"
+LICENCE = "AGPL-3.0-or-later"
+
+_revision_cache: str | None = None
+
+
+def _revision() -> str:
+    """Which build this is, for /readyz to name.
+
+    AGPL section 13 is about offering the source of a running service, and a
+    service with no UI offers it here or nowhere. The commit is the part that
+    makes the offer usable: a repository URL alone says where the project lives,
+    not which of its states is answering.
+
+    Written into the image by the Dockerfile, because the runtime stage carries
+    no git metadata. A checkout is read straight from .git, so the field says
+    something in development too rather than only in production.
+    """
+    global _revision_cache
+    if _revision_cache is not None:
+        return _revision_cache
+
+    root = Path(__file__).resolve().parents[1]
+    revision = "unknown"
+    stamped = root / "REVISION"
+    try:
+        if stamped.is_file():
+            revision = stamped.read_text(encoding="utf-8").strip() or "unknown"
+        else:
+            head = (root / ".git" / "HEAD").read_text(encoding="utf-8").strip()
+            if head.startswith("ref: "):
+                head = (root / ".git" / head[5:]).read_text(encoding="utf-8").strip()
+            revision = head or "unknown"
+    except OSError:
+        pass  # neither form is available, which is not a failure of anything
+
+    _revision_cache = revision
+    return revision
+
+
+async def healthz_endpoint(request: Request) -> PlainTextResponse:
+    """Liveness: /healthz
+
+    200 once the port is bound. It reads no state at all - not the index, not the
+    watcher, not the vault - because that is the whole contract. A liveness probe
+    that consults a subsystem is a restart loop waiting for that subsystem to
+    have a bad afternoon, and the index alone takes half a minute to build from
+    cold.
+
+    The one route with no bearer token, and deliberately: the container's own
+    HEALTHCHECK is the caller, and keeping the key off that command line keeps it
+    out of `docker inspect`. Nothing is disclosed in exchange - a caller who can
+    reach the port already knows something is listening on it.
+    """
+    return PlainTextResponse("ok\n")
+
+
+def _status() -> tuple[bool, dict]:
+    """Every subsystem's state, and whether all of them are good.
+
+    One body shape either way, so a 503 is diagnosed from the same fields a 200
+    was read from. A probe that answers `{"error": ...}` when it fails makes the
+    caller parse two schemas and tells them nothing about *which* part is down.
+    """
+    index = _index  # one snapshot; it is rebound, never mutated
+    building = not _ready and _build_error is None
+
+    subsystems = {
+        "index": {
+            "ok": _ready and _build_error is None,
+            "building": building,
+            "error": _build_error,
+            "notes": index.note_count,
+            "chunks": index.size,
+            "built_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(index.built_at)),
+            "build_seconds": round(index.build_seconds, 2),
+        },
+        # Its own subsystem rather than a field on the index, because it fails
+        # separately and on purpose: index.md needs no embedding endpoint, so it
+        # keeps working when search cannot.
+        "index_doc": {
+            "ok": _indexdoc_ready,
+            "entries": len(_indexdoc.entries),
+        },
+        "watcher": {
+            "ok": _watcher is not None and _watcher.running,
+        },
+    }
+
+    # The cache is reported and never gates. It is an optimisation, and a start
+    # that could not read it is a slower start rather than a broken server.
+    cache = _cache.as_json() if _cache is not None else {"enabled": False}
+
+    ok = all(part["ok"] for part in subsystems.values())
+    status = "ready" if ok else ("building" if building else "degraded")
+    return ok, {
+        "status": status,
+        "revision": _revision(),
+        "source": SOURCE_URL,
+        "licence": LICENCE,
+        "vault": str(vault.ROOT),
+        "uptime_seconds": round(time.time() - _started_at, 1),
+        **subsystems,
+        "cache": cache,
+    }
+
+
+async def readyz_endpoint(request: Request) -> JSONResponse:
+    """Readiness: /readyz
+
+    200 when the index has built, index.md has been scanned and the watch thread
+    is alive; 503 with the same body when any of those is not true. Behind the
+    bearer token, unlike /healthz, because the counts here are facts about a
+    private vault and the callers who want them all hold the key already.
+
+    Not wired to the container's HEALTHCHECK, and that is the point of there
+    being two routes. A vault whose watcher has died still answers every read
+    correctly from a slightly older index, which is worth reporting and is not
+    worth a restart.
+    """
+    ok, body = _status()
+    return VaultJSON(body, status_code=200 if ok else 503)
+
+
 rest_app = Starlette(
     routes=[
         Route(
@@ -832,11 +1026,15 @@ rest_app = Starlette(
         # sends POSTs does not need a special case.
         Route("/maintenance", maintenance_endpoint, methods=["GET", "POST"]),
         Route("/callouts", callouts_endpoint, methods=["GET", "POST"]),
+        Route("/healthz", healthz_endpoint, methods=["GET"]),
+        Route("/readyz", readyz_endpoint, methods=["GET"]),
     ]
 )
 
 
-REST_PREFIXES = ("/vault", "/frontmatter", "/maintenance", "/callouts")
+REST_PREFIXES = (
+    "/vault", "/frontmatter", "/maintenance", "/callouts", "/healthz", "/readyz",
+)
 
 
 class VaultRoutes:
@@ -928,12 +1126,21 @@ class BearerAuth:
     the session manager.
     """
 
+    # /healthz only, and matched exactly rather than by prefix. A prefix test
+    # would let /healthz/../vault/Personal past the token if anything upstream
+    # normalised it afterwards; an equality test cannot be talked into anything.
+    # /readyz is not here - it counts a private vault's notes, and the operator
+    # and the workflow that read it both hold the key.
+    PUBLIC = frozenset({"/healthz"})
+
     def __init__(self, inner, key: str) -> None:
         self.inner = inner
         self.expected = b"Bearer " + key.encode()
 
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] != "http":
+            return await self.inner(scope, receive, send)
+        if scope.get("path") in self.PUBLIC:
             return await self.inner(scope, receive, send)
         supplied = dict(scope["headers"]).get(b"authorization", b"")
         if not hmac.compare_digest(supplied, self.expected):
@@ -962,7 +1169,7 @@ def main() -> None:
         settings.port,
         settings.host,
         settings.port,
-        "{/vault/<path>,/frontmatter,/maintenance,/callouts}",
+        "{/vault/<path>,/frontmatter,/maintenance,/callouts,/healthz,/readyz}",
         ", ".join(settings.allowed_hosts),
     )
     uvicorn.run(app, host=settings.host, port=settings.port, log_level="info", access_log=False)

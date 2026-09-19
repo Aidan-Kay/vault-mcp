@@ -43,7 +43,9 @@ import httpx  # noqa: E402
 
 from src import callouts  # noqa: E402
 from src import maintenance  # noqa: E402
+from src import server  # noqa: E402
 from src.server import app  # noqa: E402
+from src.watcher import VaultWatcher  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -708,6 +710,131 @@ def test_document_upload() -> None:
     check("and it can be deleted", gone.status_code, 200)
 
 
+async def _bare(url: str, headers=None) -> httpx.Response:
+    """A request with no Authorization header at all."""
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://vault-mcp:8080") as c:
+        return await c.get(url, headers=headers or {})
+
+
+class _LiveWatcher:
+    running = True
+
+
+def test_health() -> None:
+    """Liveness and readiness, and the three ways they differ.
+
+    They answer different questions, they are reached with different credentials,
+    and only one of them is wired to anything that restarts the container. Each of
+    those is asserted here, because each is a decision rather than a detail.
+
+    The lifespan does not run under ASGITransport, so the index has genuinely not
+    been built - which is the state /readyz exists to report and the state
+    /healthz must not care about. The healthy case is then staged by hand, since
+    the alternative is a test that needs Ollama to assert a status code.
+    """
+    unauthenticated = asyncio.run(_bare("/healthz"))
+    check("/healthz needs no token", unauthenticated.status_code, 200)
+    check("and says so plainly", unauthenticated.text.strip(), "ok")
+    check(
+        "a wrong token is not a reason to refuse liveness either",
+        asyncio.run(_bare("/healthz", {"Authorization": "Bearer wrong"})).status_code,
+        200,
+    )
+    # The exemption is an equality test, not a prefix one, and this is the
+    # assertion that tells the two apart: a prefix test would wave anything
+    # starting with /healthz through, so an unauthenticated sibling path has to
+    # come back 401. Deliberately not written as /healthz/../vault/Notes/Alpha.md,
+    # which httpx normalises before sending - that would assert the client's
+    # behaviour and never reach the middleware at all.
+    check(
+        "nothing else is exempt by looking like it",
+        asyncio.run(_bare("/healthz/anything")).status_code,
+        401,
+    )
+    check(
+        "nor by starting with it",
+        asyncio.run(_bare("/healthzz")).status_code,
+        401,
+    )
+    check("/readyz is not exempt", asyncio.run(_bare("/readyz")).status_code, 401)
+
+    not_ready = call("GET", "/readyz")
+    check("/readyz is 503 before the index exists", not_ready.status_code, 503)
+    body = not_ready.json()
+    check("and says which state that is", body["status"], "building")
+    check("and which subsystem is not ready", body["index"]["ok"], False)
+    check("with no error, because nothing has failed yet", body["index"]["error"], None)
+    check("the watcher is reported too", body["watcher"]["ok"], False)
+    check("and index.md", body["index_doc"]["ok"], False)
+
+    # AGPL section 13: a service with no UI offers its source here or nowhere,
+    # and the commit is the part that makes the offer answerable.
+    check("the source is named", body["source"], server.SOURCE_URL)
+    check("and the licence", body["licence"], "AGPL-3.0-or-later")
+    check("and the running build", isinstance(body["revision"], str) and body["revision"] != "", True)
+
+    # Liveness while readiness is broken. This is the property the two-route split
+    # exists for: a failed index build must not make the container restartable,
+    # because restarting it takes the working half down with the broken one.
+    server._build_error = "Ollama is not answering"
+    try:
+        failed = call("GET", "/readyz")
+        check("a failed build is degraded, not building", failed.json()["status"], "degraded")
+        check("and names the failure", failed.json()["index"]["error"], "Ollama is not answering")
+        check("and is still 503", failed.status_code, 503)
+        check(
+            "while liveness is unmoved",
+            asyncio.run(_bare("/healthz")).status_code,
+            200,
+        )
+    finally:
+        server._build_error = None
+
+    # Staged healthy: every subsystem up, and the same body shape as the 503.
+    saved = (server._ready, server._indexdoc_ready, server._watcher)
+    server._ready = True
+    server._indexdoc_ready = True
+    server._watcher = _LiveWatcher()
+    try:
+        ready = call("GET", "/readyz")
+        check("everything up is a 200", ready.status_code, 200)
+        healthy = ready.json()
+        check("and says ready", healthy["status"], "ready")
+        check(
+            "with the same fields the 503 had",
+            sorted(healthy),
+            sorted(body),
+        )
+        check("the cache reports itself", healthy["cache"]["enabled"], False)
+    finally:
+        server._ready, server._indexdoc_ready, server._watcher = saved
+
+
+def test_watcher_liveness() -> None:
+    """The one input to /readyz that is a live thread rather than a flag.
+
+    Here because of a mutation that survived everything else in this file: making
+    VaultWatcher.running answer True unconditionally passed every check above,
+    since the readiness test stages a stub rather than starting a real observer.
+    A property nothing exercises is a property nobody knows the state of - and
+    this one is the difference between "the vault is watched" and "search is
+    quietly going stale", which is the failure with no other symptom.
+    """
+    async def observe() -> tuple[bool, bool, bool]:
+        watcher = VaultWatcher(lambda path: asyncio.sleep(0))
+        before = watcher.running
+        await watcher.start()
+        during = watcher.running
+        await watcher.stop()
+        return before, during, watcher.running
+
+    before, during, after = asyncio.run(observe())
+    check("a watcher that has not started is not running", before, False)
+    check("one that has started is", during, True)
+    check("and one that has been stopped is not", after, False)
+
+
 def main() -> int:
     test_structured_read()
     test_frontmatter_patch()
@@ -717,6 +844,8 @@ def main() -> int:
     test_maintenance()
     test_callouts()
     test_document_upload()
+    test_health()
+    test_watcher_liveness()
     if report():
         return 1
     print("rest: all checks passed")

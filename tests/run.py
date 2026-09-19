@@ -43,7 +43,10 @@ VAULT_READERS = ("resolve_all", "resolve_leaves", "primitives")
 # retrieval go further and never touch the tree at all, because they test
 # functions that take text rather than paths. They point VAULT_PATH at an empty
 # one only because src.config refuses to resolve without it.
-SELF_CONTAINED = ("write_scope", "documents", "chunker", "retrieval", "indexdoc", "rest")
+SELF_CONTAINED = (
+    "write_scope", "documents", "chunker", "retrieval", "indexdoc", "rest",
+    "cache", "embedder",
+)
 
 RELEVANCE = ("relevance.eval",)
 
@@ -103,6 +106,10 @@ def main(argv: list[str]) -> int:
         env = dict(os.environ)
         env["VAULT_MCP_API_KEY"] = env.get("VAULT_MCP_API_KEY", "test")
         env["PYTHONIOENCODING"] = "utf-8"
+        # No script may write an index cache into whoever ran this suite's home
+        # directory. tests/cache.py points it at its own temp tree before it
+        # imports src, so this is the default rather than a restriction.
+        env["INDEX_CACHE_PATH"] = ""
         if module in VAULT_READERS or module in RELEVANCE:
             env["VAULT_PATH"] = vault
         else:

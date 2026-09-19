@@ -52,6 +52,8 @@ the URL and the auth header rather than a rewrite into JSON-RPC.
 | `GET /frontmatter?key=&value=` | Notes whose field holds that exact value, as `[{"filename": …}]`. `&dir=` narrows the walk to one folder. |
 | `GET /maintenance` | Runs the vault's nine checkers and answers what each printed, as JSON and as one markdown block. |
 | `GET /callouts` | Every open callout in the vault, as JSON: one object per callout with its note, line, type, severity, title and body. |
+| `GET /healthz` | `ok`, once the port is bound. Depends on nothing, and is the one route with no bearer token. |
+| `GET /readyz` | Index, `index.md` and watcher state as JSON, 200 when all three are good and 503 with the same body when any is not. |
 
 On the structured read, `content` is the file byte for byte and `body` is the same text
 with the frontmatter block removed — so a caller wanting the prose does not carry its
@@ -233,6 +235,66 @@ Generated note series — the folders in `INDEX_EXCLUDE_DIRS` — are not indexe
 note; the approvals folder alone would swamp the document. Each gets one line in its
 parent section saying so, and only when the folder actually exists.
 
+## Restarts, and what one costs
+
+Two routes, answering two questions that must not be conflated. An unhealthy
+container is one something restarts, and restarting to recover a single broken
+subsystem takes out every working one with it — so **`/healthz` depends on nothing**.
+It returns `ok` once the port is bound, reads no state at all, and is what the image's
+`HEALTHCHECK` calls. It is also the one route with no bearer token, so that the
+healthcheck command does not carry the key and `docker inspect` does not show it.
+
+`/readyz` is the diagnosis, and is never acted on automatically. It reports the index
+(built, building or failed, with note and chunk counts and the last build time),
+`index.md`, the watcher, and the cache below — **the same body shape on 200 and on
+503**, so a failure is read from the fields a success was read from rather than from a
+second schema. A vault whose watch thread has died still answers every read correctly
+from a slightly older index: worth reporting, not worth a restart.
+
+It also names the running build, which is what AGPL section 13 asks of a service with
+no UI. The commit is written into the image at build time; a checkout reads `.git`.
+
+### The index cache
+
+A restart used to re-read and re-embed the whole vault. It now reuses whatever has not
+changed, keyed by content, in a single file outside the vault:
+
+| Start | Real vault, 208 files, 2223 chunks |
+| --- | --- |
+| cold | **40 s** |
+| warm | **7.8 s** |
+| after a chunker change | **17.3 s** |
+
+Two stores rather than one, and that is the whole design:
+
+    chunks    (vault path, sha256 of the file's bytes)  ->  the chunks it made
+    vectors   sha256 of a chunk's embed_text            ->  its embedding
+
+Each invalidation then costs what it should. A **chunker or extractor change** drops
+the chunks and keeps every vector, because an embedding is a function of the text
+alone — so re-chunking a vault is the ten seconds of chunking and PDF extraction and
+not the forty of a cold build. A **model change** drops the vectors and keeps the
+chunks. A **note edit** drops one file's chunks and only the vectors whose text moved.
+A **rename** drops the chunks, since the path is in them, and keeps the vectors.
+
+The chunk store's key includes a digest of the *source* of the modules that produce
+chunks, so a chunker change invalidates it without anybody remembering to say so.
+Editing a comment invalidates it too; that costs ten seconds once, where a missed
+invalidation serves stale chunks until somebody notices search has gone strange.
+
+It is an optimisation and never more: a warm build produces the same chunks in the same
+order and the same matrix row for row — asserted in `tests/cache.py`, and confirmed
+bit-for-bit against `nomic-embed-text` on the real vault. Every failure is contained:
+a corrupt, unreadable or unwritable cache costs a slower start and nothing else.
+
+It holds the vault's text — finances, insurance, addresses — outside the vault, so the
+directory is `0700` and the file `0600`. `INDEX_CACHE_PATH=` empty turns it off.
+
+What it does not cache is tokenising, which is what a warm start now spends 5.3 of its
+7.8 seconds on. The same tokenising used to be repeated for the *whole corpus* every
+time one note was saved, which is 5.4 seconds of the event loop for a one-file change;
+the index now carries its token lists forward, and a note edit costs **133 ms**.
+
 ## Scoped writes
 
 `/mcp/only/<path>` is the same MCP surface with this request's writes confined to one
@@ -267,6 +329,11 @@ server refuses to start without it rather than treating an empty key as "auth of
 | `EMBED_MODEL` | `nomic-embed-text` | Embedding model |
 | `EMBED_DIMS` | `768` | Embedding dimensions |
 | `EMBED_BATCH_SIZE` | `64` | Embedding requests per batch |
+| `EMBED_MAX_ATTEMPTS` | `5` | Attempts per embedding batch before giving up |
+| `EMBED_BACKOFF_SECONDS` | `1.0` | First wait between attempts; it doubles from there |
+| `EMBED_BACKOFF_MAX_SECONDS` | `30.0` | Ceiling on that doubling |
+| `INDEX_CACHE_PATH` | `$XDG_CACHE_HOME/vault-mcp/index.npz` | Chunk-and-vector cache. Empty disables it. |
+| `INDEX_CACHE_FLUSH_SECONDS` | `60.0` | How often an edited cache is written back. `0` writes at build and shutdown only. |
 | `SEARCH_EXCLUDE_DIRS` | `Workflows,Reports,.obsidian` | Folder *names*, left out of the search index |
 | `INDEX_EXCLUDE_DIRS` | the six generated series | Folder *paths*, left out of `index.md` |
 | `CHUNK_TARGET_TOKENS` | `400` | Target chunk size |
@@ -324,6 +391,12 @@ docker run --rm \
 Docker caches the clone layer on the URL alone, so a new commit on `main` does not
 invalidate it — rebuild with `--no-cache` to pick one up.
 
+The image carries a `HEALTHCHECK` against `/healthz`, and writes its index cache to
+`/cache`. Mount a volume there to keep it across `up --force-recreate`; without one it
+survives a restart and no more. A *named* volume inherits the image's ownership and
+works as it is, where a bind mount arrives owned by root and needs chowning to uid
+1000 — an unwritable cache is logged once and then costs only a slower start.
+
 ## Security
 
 - **Bearer auth on both surfaces**, failing closed on an unset key.
@@ -336,6 +409,12 @@ invalidate it — rebuild with `--no-cache` to pick one up.
   between resolving a path and replacing a file.
 - **Host-header allowlist**, so the MCP transport is not reachable by DNS rebinding.
 - **Per-request write scoping** on `/mcp/only/<path>`, above.
+- **One unauthenticated route**, `/healthz`, matched by equality rather than by prefix
+  so nothing that merely starts with it is exempt. It reads no state and returns a
+  constant, which tells a caller who reached the port nothing they did not have.
+- **The index cache holds the vault's text outside the vault**, which is the one place
+  this server puts it. `0700` on the directory and `0600` on the file;
+  `INDEX_CACHE_PATH=` empty if that trade is not wanted.
 
 ## Tests
 
@@ -357,6 +436,8 @@ python -m tests.chunker
 python -m tests.retrieval
 python -m tests.indexdoc
 python -m tests.rest
+python -m tests.cache
+python -m tests.embedder
 python -m tests.relevance.eval
 ```
 
@@ -365,8 +446,8 @@ That is not tidiness: `src.config` resolves settings at import and `tests.indexd
 points `VAULT_PATH` at a temp tree before importing `src`, so two scripts wanting two
 different vaults cannot share an interpreter.
 
-`write_scope`, `documents`, `indexdoc` and `rest` build their own temp vault. `chunker` and
-`retrieval` need no vault at all — they test functions that take text rather than
+`write_scope`, `documents`, `indexdoc`, `rest` and `cache` build their own temp vault. `chunker`,
+`retrieval` and `embedder` need no vault at all — they test functions that take text rather than
 paths — and point `VAULT_PATH` at an empty temp tree only because `src.config`
 refuses to resolve without one. `primitives`,
 `resolve_all` and `resolve_leaves` read a vault and assert against what is in it —
