@@ -26,11 +26,11 @@ Two problems with the plugin it replaces:
 | Read | Write |
 | --- | --- |
 | `vault_search` — hybrid search | `vault_patch` — replace a section |
-| `vault_read` — whole note or one `section=` | `vault_append` — add to the end |
+| `vault_read` — whole note, one `section=`, or a document's extracted text | `vault_append` — add to the end |
 | `vault_list` — browse a folder | `vault_write` — create or overwrite |
 | `vault_map` — heading tree as `::` paths | `vault_set_body` — replace the prose, keep the block |
 | | `vault_set_frontmatter` — set or delete a key |
-| | `vault_delete` — remove a note |
+| | `vault_delete` — remove a note or a document |
 | | `vault_move` — move, rewriting inbound links |
 
 `vault_map` emits `::`-joined paths rather than an indented tree, because the output
@@ -45,12 +45,12 @@ the URL and the auth header rather than a rewrite into JSON-RPC.
 | --- | --- |
 | `GET /vault/<path>` | The note's markdown. `?section=` narrows it to one heading. |
 | `GET /vault/<path>` with `Accept: application/json` | `{path, content, body, frontmatter}` |
-| `PUT /vault/<path>` | Create or replace, body is the note |
+| `PUT /vault/<path>` | Create or replace, body is the note. A document suffix takes the binary branch instead: the body is stored byte for byte and the answer is JSON. |
 | `POST /vault/<path>` | Append, creating the note if it is absent |
 | `PATCH /vault/<path>` | `Target:` a heading, or a frontmatter key with `Target-Type: frontmatter`, or the prose with `Target-Type: body`. `Operation: delete` removes a frontmatter key. |
 | `DELETE /vault/<path>` | Remove the note |
 | `GET /frontmatter?key=&value=` | Notes whose field holds that exact value, as `[{"filename": …}]`. `&dir=` narrows the walk to one folder. |
-| `GET /maintenance` | Runs the vault's eight checkers and answers what each printed, as JSON and as one markdown block. |
+| `GET /maintenance` | Runs the vault's nine checkers and answers what each printed, as JSON and as one markdown block. |
 | `GET /callouts` | Every open callout in the vault, as JSON: one object per callout with its note, line, type, severity, title and body. |
 
 On the structured read, `content` is the file byte for byte and `body` is the same text
@@ -94,6 +94,66 @@ Both surfaces call `src/operations.py`, so the resolver and the vault convention
 applied once regardless of how the caller arrived. Every write bumps the note's
 `timestamp`, or reports why it could not.
 
+## Filed documents
+
+A vault holds more than notes. A contract, a bill, an insurance schedule — the note
+beside it can summarise what it says, but the document is the thing that actually says
+it. `PUT`ting one to a path with an allowlisted suffix stores the bytes exactly as sent,
+extracts the text, and indexes it under the document's own path, so a search result can
+read `Home/Utilities/Files/2026-09-17 Kestrel Energy - Contract Confirmation.pdf`.
+
+**A document may only be written directly inside a folder named `Files`.** That is the
+containment control, and it is stricter than a suffix allowlist on its own: a compromised
+pipeline token that can carry raw bytes still cannot drop a file anywhere a note lives.
+The `Files/` folder is created on demand, so filing the first document beside a note
+needs no separate folder-creation capability. The rule is the vault's own filing
+convention doing double duty as enforcement, which is what makes it checkable by a human
+reading the vault as well as by the server.
+
+```
+PUT /vault/Home/Utilities/Files/2026-09-17 Kestrel Energy - Contract Confirmation.pdf
+→ {"path": "…", "sha256": "…", "size": 80157, "status": "filed",
+   "extraction": "extracted", "pages": 1, "has_text_layer": true,
+   "extracted_chars": 802, "detail": ""}
+```
+
+`status` says what happened to the file and `extraction` what happened to its text. They
+are separate because the interesting case is where they disagree: a scan files perfectly
+and extracts to nothing.
+
+- **The branch is chosen by suffix, never by `Content-Type`.** n8n forwards whatever the
+  upstream mail server labelled an attachment, and the one thing the caller is reliably
+  sure of is the name it chose to file it under. No header should decide how bytes are
+  stored.
+- **Re-sending identical bytes is a satisfied `200`, not a conflict.** The same attachment
+  *will* arrive twice — a thread reprocessed, a statement forwarded on, a run retried —
+  and a pipeline should not have to interpret an error to discover that what it wanted is
+  already true. Different bytes at the same path are a real collision and need
+  `?overwrite=true`.
+- **A document is opaque and move-only.** It can be read, filed, renamed and deleted; it
+  cannot be patched, appended to, or given frontmatter, because there is no markdown
+  inside it for those verbs to address. Moving one preserves every byte — no timestamp
+  bump, no re-encode — while inbound links are still repointed, since the note holding
+  the link is the thing being rewritten.
+- **Extraction is the server's own read.** The workflow that uploads a PDF has usually
+  read it already to decide where to file it. That read serves the workflow's decisions;
+  this one decides what search contains, and folding them together would make the vault's
+  contents depend on which workflow happened to deliver the file.
+- **A document that yields no text is reported, not smoothed over.** By the time
+  extraction runs the file is already in the vault, so refusing it is not on offer —
+  `extraction` says `needs_ocr` or `no_text` and `extracted_chars` is `0`. The vault's
+  `check_documents.py` turns that into a finding, alongside a document in a `Files/`
+  folder that no note links to, which is the failure the two-step filing workflow
+  creates when the upload succeeds and the `## Documents` row does not.
+
+PDF text is recovered with PyMuPDF4LLM — inferred headings, tables as markdown tables,
+and page boundaries as the structural unit where a document has no headings of its own,
+which a one-page bill usually does not. Scans have no text layer and are OCR'd through
+Tesseract where it is installed; the image ships it, and `DOC_OCR=false` turns it off.
+
+Uploading is REST-only. MCP arguments are JSON, and a 10 MB PDF would be 13 MB of base64
+emitted a token at a time.
+
 ## How a search result is chosen
 
 Fusing the two arms is not the last step, and the three steps after it are the ones
@@ -123,6 +183,14 @@ that decide what a caller actually sees.
   carries its own fused score rather than the score of the chunk it displaced, so the
   returned scores do not always descend — the honest picture, since the override moved a
   chunk on evidence the fusion does not hold.
+
+  It pins one chunk per *file*, not one chunk. An account number lives in the note and
+  in the statement filed beside it, and both are answers; pinning only BM25's best of the
+  two left the other to compete on fused score alone, which took a provable identifier
+  lookup from rank one to missing outright. One per file is also what stops a 27-page
+  policy booklet that names the number on every page answering the question five times
+  and hiding the note that owns it. The set is bounded without needing a bound, since the
+  rule has already established the rarest term appears in at most five chunks.
 
 Two things feed it that are worth knowing about:
 
@@ -205,6 +273,9 @@ server refuses to start without it rather than treating an empty key as "auth of
 | `CHUNK_OVERLAP_TOKENS` | `60` | Overlap between chunks |
 | `CHUNK_MIN_TOKENS` | `120` | Below this, a chunk merges into its neighbour |
 | `SEARCH_DEFAULT_K` | `6` | Default result count |
+| `DOC_SUFFIXES` | `.pdf` | Binary document types the vault will carry. Each needs an extractor, so adding one is a code change. |
+| `DOC_FILES_DIR` | `Files` | The folder name a document upload must land directly inside |
+| `DOC_OCR` | `true` | OCR a document with no text layer, where Tesseract is installed |
 | `WATCH_DEBOUNCE_SECONDS` | `2.0` | Filesystem-watch debounce before reindexing |
 | `BIND_HOST` / `BIND_PORT` | `0.0.0.0` / `8080` | Listen address |
 
@@ -281,6 +352,7 @@ python -m tests.primitives
 python -m tests.resolve_all
 python -m tests.resolve_leaves
 python -m tests.write_scope
+python -m tests.documents
 python -m tests.chunker
 python -m tests.retrieval
 python -m tests.indexdoc
@@ -293,7 +365,7 @@ That is not tidiness: `src.config` resolves settings at import and `tests.indexd
 points `VAULT_PATH` at a temp tree before importing `src`, so two scripts wanting two
 different vaults cannot share an interpreter.
 
-`write_scope`, `indexdoc` and `rest` build their own temp vault. `chunker` and
+`write_scope`, `documents`, `indexdoc` and `rest` build their own temp vault. `chunker` and
 `retrieval` need no vault at all — they test functions that take text rather than
 paths — and point `VAULT_PATH` at an empty temp tree only because `src.config`
 refuses to resolve without one. `primitives`,
@@ -305,7 +377,8 @@ and an unwrapped one, a note carrying the same leaf heading under two parents an
 another carrying the same full path twice, a flat-list note of twelve unrelated
 bullets, a note long enough to chunk six ways, identifier-dense notes, generated
 series under `Workflows/` and `Reports/` that must stay out of the index, and three
-PDFs under `Files/` for the document work.
+PDFs under `Files/` — two with a text layer and one deliberately without, which is the
+scanned-bill case the extractor has to report rather than quietly return nothing for.
 
 `primitives` asserts POSIX file modes and symlink refusal, so three of its checks fail
 on Windows for want of privileges rather than for want of correctness. It passes on
@@ -330,10 +403,15 @@ It runs without Ollama by hashing tokens into `EMBED_DIMS` buckets for the dense
 deterministic on every machine, and honest about what that costs: the stub has no
 semantics, so queries needing them are tagged `dense` and reported without being
 scored. What the fixture run does measure is the lexical arm, the tokeniser, the
-fusion, the lookup override and single-source concentration. The real vault and the
-real embedder are a local run against a query set that stays out of git, because the
-queries name real accounts — see
+fusion, the lookup override, document retrieval and single-source concentration. The
+real vault and the real embedder are a local run against a query set that stays out of
+git, because the queries name real accounts — see
 [`tests/relevance/private.example.json`](tests/relevance/private.example.json).
+
+Four of the fixture's queries can only be answered by a filed PDF — a tariff name, a
+supply address, a cooling-off period and an employment notice period, none of which any
+note contains. They are there because "documents are indexed" is a claim about
+retrieval, and the only way to hold it is a query that fails when indexing them stops.
 
 `tests.chunker` and `tests.retrieval` are the unit half of the retrieval work: the
 relevance suite says whether retrieval got better, these say why. They carry the cases

@@ -88,8 +88,9 @@ def _bm25_document(chunk: dict) -> list[str]:
 def chunk_terms(chunk: dict) -> frozenset[str]:
     """The distinct terms one chunk contributes to the lexical index.
 
-    Exposed for the lookup override, which has to ask whether one chunk holds
-    every term of a query rather than merely scoring well on some of them.
+    The live search path reads VaultIndex.term_sets instead, which holds exactly
+    this for every chunk and is built once. This stays as the definition of what
+    that field contains, and for callers holding a chunk rather than an index.
     """
     return frozenset(_bm25_document(chunk))
 
@@ -108,12 +109,20 @@ class VaultIndex:
     # costs a pass over the whole corpus, and the lookup override asks once per
     # term of every query.
     doc_freqs: dict[str, int] = field(default_factory=dict)
+    # chunk index -> the distinct terms it holds, parallel to `chunks`. Built
+    # here because __post_init__ already tokenises every chunk to feed BM25, so
+    # this costs one frozenset per chunk and no extra tokenising at all. The
+    # lookup override asks "does this chunk hold every query term" of up to
+    # CANDIDATES chunks per query; doing that by re-tokenising cost 107 ms per
+    # query on a 2100-chunk vault, against 0.1 ms for the set comparisons.
+    term_sets: list[frozenset[str]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.bm25 is None and self.chunks:
             documents = [_bm25_document(c) for c in self.chunks]
             self.bm25 = BM25Okapi(documents)
             self.doc_freqs = Counter(term for document in documents for term in set(document))
+            self.term_sets = [frozenset(document) for document in documents]
 
     @property
     def size(self) -> int:

@@ -399,11 +399,32 @@ def test_walk_scopes_differ() -> None:
     contain a link". Using the indexing walk for a link rewrite silently skipped
     every note in Workflows/ and Reports/ - found in integration, not here, which
     is why it is pinned now.
+
+    Neither walk contains the other, and that only became true when documents
+    were filed. Each holds something the other must not: the index walk holds
+    PDFs, which have no links to rewrite and would be decoded as text if the
+    rewriter saw them; the link walk holds Workflows/ and Reports/, which are
+    linked constantly and searched never. A subset assertion held here until
+    Phase 2 and would now be the wrong shape to restore.
     """
     indexed = {p.relative_to(vault.ROOT).as_posix() for p in vault.walk_notes()}
     everything = {p.relative_to(vault.ROOT).as_posix() for p in vault.walk_all_notes()}
 
-    check("the indexing walk is a subset", indexed <= everything, True)
+    check(
+        "every note in the index walk is in the link walk",
+        {p for p in indexed if p.endswith(".md")} <= everything,
+        True,
+    )
+    check(
+        "documents are indexed",
+        [p for p in indexed if p.endswith(".pdf")] != [],
+        True,
+    )
+    check(
+        "and never offered to the link rewriter, which would decode them as text",
+        [p for p in everything if not p.endswith(".md")],
+        [],
+    )
     generated = {p for p in everything if p.startswith(("Workflows/", "Reports/"))}
     check("generated series exist to be linked", len(generated) > 0, True)
     check("but are absent from the index walk", generated & indexed, set())

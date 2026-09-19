@@ -158,7 +158,7 @@ def selection() -> None:
 
 
 def pinning() -> None:
-    chosen = search.diversify(CLOSE, CHUNKS, 5, pinned=7)
+    chosen = search.diversify(CLOSE, CHUNKS, 5, pinned=[7])
     check("the pinned hit leads", chosen[0][0], 7)
     check("it carries its own fused score", chosen[0][1], dict(CLOSE)[7])
     check("nothing is returned twice", len({doc for doc, _ in chosen}), 5)
@@ -169,10 +169,63 @@ def pinning() -> None:
     )
 
     # Pinning a chunk of the dominant note must not buy that note a third slot.
-    chosen = search.diversify(DOMINANT, CHUNKS, 5, pinned=3)
+    chosen = search.diversify(DOMINANT, CHUNKS, 5, pinned=[3])
     paths = [CHUNKS[doc]["path"] for doc, _ in chosen]
     check("a pin counts against its own cap", paths.count("long.md"), 2)
     check("the pin is still first", chosen[0][0], 3)
+
+    # Several pins: an identifier held by a note and by the document filed
+    # beside it. Both lead, in the order BM25 ranked them.
+    chosen = search.diversify(CLOSE, CHUNKS, 5, pinned=[7, 8])
+    check("both pins lead", [doc for doc, _ in chosen][:2], [7, 8])
+    check("and they keep their own scores", chosen[1][1], dict(CLOSE)[8])
+    check("nothing is returned twice", len({doc for doc, _ in chosen}), 5)
+
+    # More pins than slots. k is what the caller asked for and the pins are
+    # ordered, so the surplus is dropped rather than overflowing k.
+    chosen = search.diversify(CLOSE, CHUNKS, 2, pinned=[9, 8, 7])
+    check("pins never exceed k", len(chosen), 2)
+    check("the best pins are the ones kept", [doc for doc, _ in chosen], [9, 8])
+
+    # A pin the fusion never surfaced cannot be conjured into the results: its
+    # score would have to be invented.
+    chosen = search.diversify(CLOSE, CHUNKS, 5, pinned=[999])
+    check("an unranked pin is ignored", 999 in {doc for doc, _ in chosen}, False)
+    check("and the rest of the list is unaffected", len(chosen), 5)
+
+
+def lookup_hit_selection() -> None:
+    """Which chunks the override pins, once a corpus holds documents.
+
+    One per path. The case is an account number that appears in a note and in
+    the statement filed beside it: both are answers. The case it must not
+    produce is five chunks of one statement that names the number on every page,
+    which answers the question five times and hides the note that owns it.
+    """
+    # Each chunk carries its own terms, rather than being looked up by identity:
+    # two chunks of one PDF are equal as dicts, and keying off that would have
+    # silently given the second chunk the first one's terms.
+    # Parallel lists, exactly as VaultIndex holds them: the term sets are built
+    # once at index time from the same tokenising that feeds BM25, because
+    # re-deriving them per query cost 107 ms on a 2100-chunk vault.
+    chunks = _chunks(["note.md", "Files/bill.pdf", "Files/bill.pdf", "other.md"])
+    term_sets = [
+        frozenset({"ke", "8842071", "electr"}),
+        frozenset({"ke", "8842071", "tariff"}),
+        frozenset({"ke", "8842071", "page"}),
+        frozenset({"ke", "boiler"}),
+    ]
+
+    hits = search.lookup_hits(chunks, term_sets, ["ke", "8842071"], [1, 2, 0, 3])
+    check("one chunk per file", [chunks[d]["path"] for d in hits],
+          ["Files/bill.pdf", "note.md"])
+    check("the file's best chunk is the one kept", hits[0], 1)
+    check("a chunk missing a term is not a hit", 3 in hits, False)
+    check(
+        "no chunk holding every term means nothing to pin",
+        search.lookup_hits(chunks, term_sets, ["ke", "absent"], [1, 2, 0, 3]),
+        [],
+    )
 
 
 def backfill() -> None:
@@ -202,6 +255,7 @@ def main() -> int:
     caps()
     selection()
     pinning()
+    lookup_hit_selection()
     backfill()
 
     if report():

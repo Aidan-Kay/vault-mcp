@@ -8,5 +8,19 @@ rank-bm25>=0.2.2,<1
 # its own - the alternative was 250 lines of hand-rolled Porter nobody would
 # want to verify.
 snowballstemmer>=2.2,<4
+# PDF extraction for filed documents. Both are Artifex's AGPL-3.0 half of a
+# dual licence, which is the trade LICENSE was settled to make.
+#
+# pymupdf4llm pulls pymupdf_layout, and with it onnxruntime and networkx - about
+# 175 MB that the plan did not budget for when it called this the lightweight
+# option. It is still the right choice, and measured rather than assumed: with
+# the layout models the seven real documents this was built against extract
+# cleanly, and without them a two-page pet insurance IPID drops from 9307
+# characters to 477, losing the policy name, the insurer and every coverage
+# table. 477 characters reads as plausible rather than empty, so nothing would
+# have flagged it - the document would have filed correctly, been described
+# correctly, and answered no query ever again. The ONNX models ship inside the
+# wheel, so nothing is fetched at runtime.
+pymupdf4llm>=1.28,<2
 python-frontmatter>=1.1,<2
 watchdog>=4.0,<7

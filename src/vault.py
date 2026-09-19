@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+from . import documents
 from .config import settings
 
 
@@ -192,12 +193,25 @@ def _reject_symlinks(raw: Path) -> None:
             return  # nothing beyond this can exist either
 
 
-def safe_resolve(rel_path: str, *, must_exist: bool = True, writing: bool = False) -> Path:
+def safe_resolve(
+    rel_path: str,
+    *,
+    must_exist: bool = True,
+    writing: bool = False,
+    allow_documents: bool = False,
+) -> Path:
     """Resolve a vault-relative path, or raise.
 
     Rejects traversal, absolute escapes and symlinks. When writing=True it also
     rejects protected paths and anything that is not a .md file. Never falls
     back to a default.
+
+    `allow_documents` widens that last rule to the DOC_SUFFIXES allowlist, and
+    only the three verbs that treat a file as opaque bytes pass it: upload,
+    move and delete. Every content verb - patch, append, write, set_body,
+    set_frontmatter - leaves it False and so stays markdown-only, because there
+    is no structure inside a PDF for any of them to address. The default is the
+    strict one so that a new caller has to say it means this.
     """
     if "\x00" in rel_path:
         raise VaultError("path contains a null byte")
@@ -219,8 +233,14 @@ def safe_resolve(rel_path: str, *, must_exist: bool = True, writing: bool = Fals
     if writing:
         if is_protected(rel):
             raise VaultError(f"path is protected and cannot be written: {rel.as_posix()!r}")
-        if candidate.suffix.lower() != ".md":
-            raise VaultError(f"only .md files may be written, got: {rel.as_posix()!r}")
+        suffix = candidate.suffix.lower()
+        if suffix != ".md" and not (allow_documents and suffix in settings.doc_suffixes):
+            allowed = ".md"
+            if allow_documents:
+                allowed = ", ".join([".md", *sorted(settings.doc_suffixes)])
+            raise VaultError(
+                f"only {allowed} files may be written, got: {rel.as_posix()!r}"
+            )
         scope = _out_of_scope(rel)
         if scope is not None:
             # Deliberately not phrased as something to retry. A caller that
@@ -299,12 +319,52 @@ def iter_headings(text: str) -> list[Heading]:
 
 
 def read_text(path: Path) -> str:
+    """The UTF-8 text of a note, and only ever of a note.
+
+    The suffix check is the fix for a latent defect rather than tidiness.
+    `errors="replace"` decodes anything at all, so before documents existed
+    read_text() on a PDF returned a page of replacement characters and called it
+    a note - and every caller downstream of it, from the chunker to the link
+    rewriter, believed it. Refusing here means a path that is not markdown can
+    only be reached through the door that knows what to do with it.
+    """
+    suffix = path.suffix.lower()
+    if suffix != ".md":
+        if suffix in settings.doc_suffixes:
+            raise VaultError(
+                f"{relpath(path)!r} is a document, not a note. Read it with "
+                "vault_read, which extracts its text; it has no markdown source "
+                "to edit."
+            )
+        raise VaultError(
+            f"{relpath(path)!r} is not a note. Only .md files, and documents "
+            f"with an allowlisted suffix, can be read from this vault."
+        )
     try:
         return path.read_text(encoding="utf-8", errors="replace")
     except IsADirectoryError as exc:
         raise VaultError(f"{relpath(path)!r} is a directory, not a note") from exc
     except OSError as exc:
         raise VaultError(f"cannot read {relpath(path)!r}: {exc}") from exc
+
+
+def read_any(path: Path) -> str:
+    """Markdown for a note, extracted markdown for a document, or raise.
+
+    The one dispatch point. A caller that wants "the text of this path" asks
+    here and does not care which of the two it got, which is what lets search,
+    the chunker and the read surface treat a filed bill as a note that happens
+    to have arrived as bytes.
+    """
+    if documents.is_document(path):
+        extraction = documents.extract(path)
+        if extraction.searchable:
+            return extraction.markdown
+        raise VaultError(
+            f"no text could be extracted from {relpath(path)!r}: "
+            f"{extraction.detail or extraction.status}"
+        )
+    return read_text(path)
 
 
 def extract_section(text: str, section: str) -> str:
@@ -336,7 +396,15 @@ def read_note(rel_path: str, section: str | None = None) -> str:
             f"{relpath(path)!r} is a directory, not a note - list it rather "
             "than reading it"
         )
-    text = read_text(path)
+    text = read_any(path)
+    if section and documents.is_document(path):
+        # A document's headings are inferred by the extractor rather than
+        # written by anyone, so naming one is guesswork the caller cannot
+        # verify. Reading the whole thing is the honest offer.
+        raise VaultError(
+            f"{relpath(path)!r} is a document; its headings are inferred during "
+            "extraction and cannot be addressed by name. Read the whole document."
+        )
     return extract_section(text, section) if section else text
 
 
@@ -418,9 +486,24 @@ def metadata(text: str) -> dict:
 
 def parse_note(rel_path: str) -> dict:
     path = safe_resolve(rel_path)
+    if documents.is_document(path):
+        # A document has no frontmatter and no headings anyone wrote, so it has
+        # no patch targets - which is the question this answers. Saying that
+        # outright, with the extraction verdict beside it, is more use than
+        # either an error or an empty outline: it tells a caller both why it
+        # cannot edit this file and whether search can see inside it.
+        extraction = documents.extract(path)
+        return {
+            "path": relpath(path),
+            "document": True,
+            "frontmatter": {},
+            "headings": [],
+            "extraction": extraction.as_json(),
+        }
     text = read_text(path)
     return {
         "path": relpath(path),
+        "document": False,
         "frontmatter": metadata(text),
         "headings": [
             {"depth": h.depth, "text": h.text, "line": h.line} for h in iter_headings(text)
@@ -453,6 +536,17 @@ def note_json(rel_path: str, section: str | None = None) -> dict:
             f"{relpath(path)!r} is a directory, not a note - list it rather "
             "than reading it"
         )
+    if documents.is_document(path):
+        # No frontmatter and no section: a document carries neither, and
+        # answering {} for one while answering a parsed block for the other
+        # would be the same shape describing two different things.
+        content = read_note(rel_path, section)
+        return {
+            "path": relpath(path),
+            "content": content,
+            "body": content,
+            "frontmatter": {},
+        }
     text = read_text(path)
     content = extract_section(text, section) if section else text
     return {
@@ -470,6 +564,16 @@ def walk_all_notes() -> list[Path]:
     this one answers "what could contain a link". Since the exclusion split,
     Workflows/ and Reports/ are ordinary notes for every purpose except search,
     so a link rewrite that used the indexing walk would silently skip 388 notes.
+
+    Markdown only, and it stays that way now documents exist. The plan had both
+    walks gaining the document suffixes; checking the three callers says
+    otherwise, and each one breaks differently. _rewrite_links would decode a
+    PDF and write it back as UTF-8 - the exact corruption the byte-preserving
+    move() branch exists to prevent, arriving by another door. indexdoc.build
+    would put a Files/ folder into the generated index.md, contradicting the
+    one thing the vault proposal wanted confirmed. find_by_frontmatter would
+    scan PDF bytes for YAML. All three want notes, because a document is a link
+    *target* and never a link source.
     """
     notes: list[Path] = []
     for path in sorted(ROOT.rglob("*.md")):
@@ -484,12 +588,20 @@ def walk_all_notes() -> list[Path]:
 
 
 def walk_notes() -> list[Path]:
-    """Every indexable markdown file, exclusions applied."""
+    """Every indexable file, exclusions applied: notes and documents alike.
+
+    Documents are deliberately not excluded. Indexing them is the entire point
+    of filing them here, and a chunk from one is attributed to the document's
+    own path, so a hit reads as the PDF it came from rather than as the note
+    beside it.
+    """
     notes: list[Path] = []
-    for path in sorted(ROOT.rglob("*.md")):
+    for path in sorted(ROOT.rglob("*")):
         try:
             rel = path.relative_to(ROOT)
         except ValueError:
+            continue
+        if path.suffix.lower() != ".md" and not documents.is_document(path):
             continue
         if is_search_excluded(rel) or not path.is_file():
             continue
@@ -651,16 +763,29 @@ def atomic_write(path: Path, text: str) -> None:
     if it does - Samba forces uid 1000 for every accessor - but the vault has a
     settled mix of 644 and 777 and there is no reason to churn it.
     """
-    text = normalise_body(text)
+    _atomic(path, normalise_body(text).encode("utf-8"))
+
+
+def atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Replace a file's contents with exact bytes, preserving its mode.
+
+    The same guarantee as atomic_write and deliberately not the same function.
+    Every transformation that one applies - newline normalisation, UTF-8
+    encoding - is correct for a note and destroys a PDF, so the shared part is
+    the temp-file-and-replace dance and nothing above it.
+    """
+    _atomic(path, data)
+
+
+def _atomic(path: Path, payload: bytes) -> None:
     mode = (path.stat().st_mode & 0o777) if path.exists() else NEW_FILE_MODE
     path.parent.mkdir(parents=True, exist_ok=True)
 
     fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=".vault-mcp-", suffix=".tmp")
     tmp = Path(tmp_name)
     try:
-        # newline="" defeats universal-newline translation; the text is already LF.
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
-            handle.write(text)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
         os.chmod(tmp, mode)
         os.replace(tmp, path)
     except BaseException:

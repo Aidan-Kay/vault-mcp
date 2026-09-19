@@ -27,7 +27,7 @@ from pathlib import Path
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
-from . import vault
+from . import documents, vault
 from .config import settings
 
 log = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ class _Handler(FileSystemEventHandler):
 
     def submit(self, raw_path: str | bytes) -> None:
         path = Path(raw_path.decode() if isinstance(raw_path, bytes) else raw_path)
-        if path.suffix.lower() != ".md":
+        if path.suffix.lower() != ".md" and not documents.is_document(path):
             return
         try:
             relative = path.resolve().relative_to(vault.ROOT)
@@ -172,7 +172,15 @@ class VaultWatcher:
                 # edits to them would be missed, and reconcile catches those.
                 log.exception("cannot watch %s", directory)
 
-        return sorted(directory.rglob("*.md"))
+        # A Files/ folder arrives as a directory event when the first document
+        # is filed into a note's folder, and its contents have to be adopted the
+        # same way a folder of notes is - otherwise the first upload into a new
+        # folder is indexed only by the next full rebuild.
+        return sorted(
+            path
+            for path in directory.rglob("*")
+            if path.suffix.lower() == ".md" or documents.is_document(path)
+        )
 
     async def _drain_dirs(self) -> None:
         """Feed the notes under an arrived directory back through the queue."""

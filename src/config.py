@@ -25,6 +25,17 @@ def _int(name: str, default: int) -> int:
         raise RuntimeError(f"{name} must be an integer, got {raw!r}") from exc
 
 
+def _bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{name} must be a boolean, got {raw!r}")
+
+
 def _float(name: str, default: float) -> float:
     raw = os.environ.get(name, "").strip()
     if not raw:
@@ -44,6 +55,9 @@ class Settings:
     embed_model: str
     search_exclude_dirs: frozenset[str]
     index_exclude_dirs: tuple[str, ...]
+    doc_suffixes: frozenset[str]
+    doc_files_dir: str
+    doc_ocr: bool
     chunk_target_tokens: int
     chunk_overlap_tokens: int
     chunk_min_tokens: int
@@ -98,6 +112,24 @@ def load() -> Settings:
             "Reports/Vault Maintenance,"
             "Reports/Monthly Events Discovery",
         ),
+        # Binary document types the vault will carry. One list, read by the
+        # read path, the write path, the move path and the index walk, so a
+        # suffix cannot be uploadable and unreadable at the same time. Every
+        # entry needs an extractor in documents.py, which is why adding .docx
+        # is a code change and not a config change.
+        doc_suffixes=frozenset(
+            part if part.startswith(".") else f".{part}"
+            for part in (p.lower() for p in _csv("DOC_SUFFIXES", ".pdf"))
+        ),
+        # The folder name a document upload must land directly inside. This is
+        # the containment control: a credential that can carry bytes cannot put
+        # them anywhere a note lives. Configurable because it is a vault
+        # convention rather than a law, but changing it changes the vault.
+        doc_files_dir=os.environ.get("DOC_FILES_DIR", "Files").strip("/ ") or "Files",
+        # OCR a document that has no text layer. Requires a Tesseract binary and
+        # its tessdata on the host; documents.py reports it unavailable rather
+        # than failing when there is none. See the OCR note in the README.
+        doc_ocr=_bool("DOC_OCR", True),
         chunk_target_tokens=_int("CHUNK_TARGET_TOKENS", 400),
         chunk_overlap_tokens=_int("CHUNK_OVERLAP_TOKENS", 60),
         chunk_min_tokens=_int("CHUNK_MIN_TOKENS", 120),

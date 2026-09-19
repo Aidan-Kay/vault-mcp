@@ -11,11 +11,15 @@ self-evidencing: the model can see it hit the section it meant.
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
 import urllib.parse
 
+from . import documents
 from . import edit
 from . import vault
+from .config import settings
 from .vault import VaultError
 
 _LINK_TARGET = re.compile(r"\]\(([^)]+)\)")
@@ -141,11 +145,11 @@ def set_body(path: str, content: str) -> str:
 
 
 def delete(path: str) -> str:
-    """Delete a note. There is no trash - the vault's git history is the undo."""
-    resolved = vault.safe_resolve(path, writing=True)
+    """Delete a note or a filed document. There is no trash - git is the undo."""
+    resolved = vault.safe_resolve(path, writing=True, allow_documents=True)
     rel = vault.relpath(resolved)
     if resolved.is_dir():
-        raise VaultError(f"{rel} is a directory; only notes can be deleted")
+        raise VaultError(f"{rel} is a directory; only files can be deleted")
     resolved.unlink()
     return f"deleted {rel}"
 
@@ -210,23 +214,59 @@ def move(source: str, destination: str, update_links: bool = True) -> str:
             "every note that links to it, so it cannot be scoped. Nothing was changed."
         )
 
-    src = vault.safe_resolve(source, writing=True)
-    dest = vault.safe_resolve(destination, must_exist=False, writing=True)
+    src = vault.safe_resolve(source, writing=True, allow_documents=True)
+    dest = vault.safe_resolve(destination, must_exist=False, writing=True, allow_documents=True)
 
     if dest.exists():
         raise VaultError(f"{vault.relpath(dest)} already exists")
     if src.is_dir():
-        raise VaultError(f"{vault.relpath(src)} is a directory; only notes can be moved")
+        raise VaultError(f"{vault.relpath(src)} is a directory; only files can be moved")
 
     source_rel = vault.relpath(src)
     dest_rel = dest.resolve().relative_to(vault.ROOT).as_posix()
 
-    text = vault.read_text(src)
-    updated, note = _timestamped(text)
+    if documents.is_document(src) != documents.is_document(dest):
+        # A move is a move, not a conversion. Renaming a PDF to .md would leave
+        # a file the read path decodes as text and the chunker parses for
+        # frontmatter, which is the corruption below by a slower route.
+        raise VaultError(
+            f"cannot move {source_rel} to {dest_rel}: a move may not change a "
+            "file between a note and a document. Rename it within its own kind."
+        )
 
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    vault.atomic_write(dest, updated)
-    src.unlink()
+    if documents.is_document(src):
+        # The Files/ parent rule is deliberately not enforced here, where upload
+        # enforces it. That rule contains the credential that carries *bytes*,
+        # and a move carries none - it moves bytes already in the vault. The
+        # pipeline token that can upload is scoped, and a scoped caller cannot
+        # move at all (see above), so the only caller who could move a document
+        # out of a Files/ folder is one that could already write any note
+        # anywhere. check_documents.py reports a misfiled document as a warning,
+        # which is the right weight for a convention breach that costs nothing
+        # but discoverability.
+        #
+        # Byte-preserving, and every step of the note path is wrong for it.
+        # read_text would decode the PDF with errors="replace", _timestamped
+        # would give it a YAML header, and atomic_write would re-encode the
+        # result as UTF-8 - which is not a move but a shredder. There is no
+        # timestamp to bump either: a document has no frontmatter, and the
+        # bytes are the same bytes wherever they sit.
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.replace(src, dest)
+        except OSError:
+            # Different filesystems under one vault root - a bind mount, a
+            # mounted share. copy2 keeps the mtime, which is the closest thing
+            # a document has to a timestamp.
+            shutil.move(str(src), str(dest))
+        note = ""
+    else:
+        text = vault.read_text(src)
+        updated, note = _timestamped(text)
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        vault.atomic_write(dest, updated)
+        src.unlink()
 
     message = f"moved {source_rel} to {dest_rel}{note}"
     if update_links:
@@ -235,3 +275,89 @@ def move(source: str, destination: str, update_links: bool = True) -> str:
     else:
         message += "; links NOT updated"
     return message
+
+
+def upload(path: str, data: bytes, overwrite: bool = False) -> dict:
+    """File raw bytes as a document, extract its text, and report what landed.
+
+    The containment control is the parent folder, not the credential. A
+    document may only be written directly inside a folder named `Files`, which
+    is where this vault's convention already puts them, so a pipeline token that
+    can carry bytes cannot drop a PDF anywhere a note lives. That is stricter
+    than a suffix allowlist alone and it replaced an earlier design that scoped
+    the pipeline's credential to a staging folder - the convention turned out to
+    be the better enforcement point, because it is the thing a human reading the
+    vault can also check.
+
+    The `Files` folder is created on demand. Lyra picks the destination inside
+    the n8n workflow and the first document filed beside a note would otherwise
+    need a separate folder-creation capability to land at all.
+
+    Re-uploading identical bytes is a satisfied no-op rather than a conflict.
+    The same attachment *will* arrive twice - a thread reprocessed, a statement
+    forwarded on, a run retried - and a pipeline should not have to interpret an
+    error to find out that what it wanted is already true. Different bytes at
+    the same path are a real collision and are refused unless overwrite is set.
+
+    Extraction runs here, on the server's own read of the file, rather than
+    taking whatever the uploading workflow says the document contains. The two
+    reads serve different questions and only one of them decides what search can
+    find.
+    """
+    if not data:
+        raise VaultError("refusing to file an empty document")
+
+    resolved = vault.safe_resolve(path, must_exist=False, writing=True, allow_documents=True)
+    rel = vault.relpath(resolved)
+
+    if not documents.is_document(resolved):
+        raise VaultError(
+            f"{rel} is not an allowlisted document. Uploadable suffixes are: "
+            f"{documents.suffix_list()}."
+        )
+
+    if resolved.parent.name != settings.doc_files_dir:
+        raise VaultError(
+            f"a document must be filed directly inside a folder named "
+            f"{settings.doc_files_dir!r}, and {rel} is not. File it beside the "
+            f"note that owns it, as "
+            f"<folder>/{settings.doc_files_dir}/<YYYY-MM-DD Issuer - Type>"
+            f"{resolved.suffix}."
+        )
+
+    digest = documents.sha256_bytes(data)
+    existed = resolved.exists()
+    status = "filed"
+
+    if existed:
+        if documents.sha256_file(resolved) == digest:
+            status = "unchanged"
+        elif overwrite:
+            status = "replaced"
+        else:
+            raise VaultError(
+                f"{rel} already holds a different document. Pass overwrite=true "
+                "to replace it, or file this one under a name of its own."
+            )
+
+    if status != "unchanged":
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        vault.atomic_write_bytes(resolved, data)
+
+    # `status` says what happened to the file and `extraction` what happened to
+    # its text, and they are separate because the interesting case is the one
+    # where they disagree: a scan files perfectly and extracts to nothing, and a
+    # caller that had only one field would have to guess which it was being
+    # told about.
+    extraction = documents.extract(resolved)
+    return {
+        "path": rel,
+        "sha256": digest,
+        "size": len(data),
+        "status": status,
+        "extraction": extraction.status,
+        "pages": extraction.pages,
+        "has_text_layer": extraction.has_text_layer,
+        "extracted_chars": extraction.extracted_chars,
+        "detail": extraction.detail,
+    }

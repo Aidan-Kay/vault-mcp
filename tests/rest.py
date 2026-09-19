@@ -35,6 +35,7 @@ from pathlib import Path
 # Before `from src import ...`, and an assignment rather than setdefault:
 # tests/__init__ has already pointed this at the real vault, and this runner
 # must not write there.
+REPO = Path(__file__).resolve().parents[1]
 _VAULT = Path(tempfile.mkdtemp(prefix="vault-rest-"))
 os.environ["VAULT_PATH"] = str(_VAULT)
 
@@ -646,6 +647,67 @@ async def _unauthenticated() -> int:
         return (await c.get("/frontmatter?key=status&value=pending")).status_code
 
 
+def test_document_upload() -> None:
+    """PUT of a document: the binary branch, chosen by suffix.
+
+    The dispatch is on the *suffix*, never on Content-Type. n8n forwards
+    whatever the upstream mail server labelled an attachment, and the only thing
+    the caller is reliably sure of is the name it chose to file the document
+    under - so the checks below send a PDF under a deliberately wrong content
+    type and a note under a PDF-ish one, and assert that neither header is what
+    decided.
+    """
+    write_fixture()
+    pdf = (REPO / "tests/fixtures/vault/Home/Utilities/Files"
+           / "2026-09-17 Kestrel Energy - Contract Confirmation.pdf").read_bytes()
+
+    filed = call(
+        "PUT",
+        "/vault/Notes/Files/2026-09-17 Kestrel Energy - Contract Confirmation.pdf",
+        headers={"content-type": "text/plain"},
+        content=pdf,
+    )
+    check("a filed document is 200", filed.status_code, 200)
+    check("and answers JSON, not prose", filed.headers["content-type"].split(";")[0], "application/json")
+    body = filed.json()
+    check("the response names the path", body["path"],
+          "Notes/Files/2026-09-17 Kestrel Energy - Contract Confirmation.pdf")
+    check("and what happened to the file", body["status"], "filed")
+    check("and what happened to its text", body["extraction"], "extracted")
+    check("it reports the page count", body["pages"], 1)
+    check("the text layer", body["has_text_layer"], True)
+    check("how much came out", body["extracted_chars"] > 0, True)
+    check("and the hash of the bytes it stored", len(body["sha256"]), 64)
+    check(
+        "the bytes on disk are the bytes sent, despite the content type",
+        (_VAULT / "Notes/Files/2026-09-17 Kestrel Energy - Contract Confirmation.pdf").read_bytes(),
+        pdf,
+    )
+
+    again = call("PUT", "/vault/Notes/Files/2026-09-17 Kestrel Energy - Contract Confirmation.pdf",
+                 content=pdf)
+    check("re-sending identical bytes is a satisfied 200", again.status_code, 200)
+    check("reported as unchanged rather than as a conflict", again.json()["status"], "unchanged")
+
+    outside = call("PUT", "/vault/Notes/loose.pdf", content=pdf)
+    check("a document outside a Files/ folder is 400", outside.status_code, 400)
+    check_in("and says where it should have gone", "Files", outside.text)
+
+    # A .md path is still the note branch however the body is labelled.
+    note = call("PUT", "/vault/Notes/Gamma.md",
+                headers={"content-type": "application/pdf"}, content="# Gamma\n")
+    check("a note path stays the note branch", note.status_code, 200)
+    check("answering prose, not JSON", note.headers["content-type"].split(";")[0], "text/plain")
+
+    # And the read side: a document comes back as its extracted text.
+    read = call("GET", "/vault/Notes/Files/2026-09-17 Kestrel Energy - Contract Confirmation.pdf")
+    check("a document reads back as 200", read.status_code, 200)
+    check_in("as extracted markdown rather than bytes", "KE-8842071", read.text)
+
+    gone = call("DELETE", "/vault/Notes/Files/2026-09-17 Kestrel Energy - Contract Confirmation.pdf")
+    check("and it can be deleted", gone.status_code, 200)
+
+
 def main() -> int:
     test_structured_read()
     test_frontmatter_patch()
@@ -654,6 +716,7 @@ def main() -> int:
     test_body_patch()
     test_maintenance()
     test_callouts()
+    test_document_upload()
     if report():
         return 1
     print("rest: all checks passed")

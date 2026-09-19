@@ -12,6 +12,7 @@ own chunk instead. See _flat_list_pieces for what disqualifies a list.
 
 from __future__ import annotations
 
+import logging
 import re
 import statistics
 from pathlib import Path
@@ -19,8 +20,10 @@ from typing import NamedTuple
 
 import frontmatter
 
-from . import vault
+from . import documents, vault
 from .config import settings
+
+log = logging.getLogger(__name__)
 
 # Characters per token. A tokeniser dependency is not warranted: the target is
 # soft, and nomic truncates at 8192 regardless.
@@ -390,6 +393,9 @@ def build_embed_text(title: str, description: str, breadcrumb: str, text: str) -
 
 
 def chunk_note(path: Path) -> list[dict]:
+    if documents.is_document(path):
+        return chunk_document(path)
+
     text = vault.read_text(path)
     try:
         meta = dict(frontmatter.loads(text).metadata)
@@ -411,4 +417,51 @@ def chunk_note(path: Path) -> list[dict]:
             "line": line,
         }
         for breadcrumb, line, body in _chunk_spans(text)
+    ]
+
+
+def chunk_document(path: Path) -> list[dict]:
+    """A filed document as chunks, attributed to the document's own path.
+
+    Extraction happens at the edge and everything after it is the note path
+    unchanged - the same sectioning, the same token target, the same flat-list
+    rule. A bill's summary table is a section like any other once it is
+    markdown.
+
+    Two things differ, and both come from a document having no frontmatter.
+    The title is the filename, which in this vault is not a fallback but the
+    convention: `YYYY-MM-DD Issuer - Document Type.pdf` names the date, the
+    issuer and the kind, and those are exactly the terms somebody searches for.
+    The description is the folder the document sits beside, because `Files` on
+    its own says nothing and the owning note's name says what the document is
+    about. A document that yielded no text produces no chunks rather than an
+    empty one: an unsearchable file should be absent from search, not present
+    and silent, and the vault's checker is what surfaces it.
+    """
+    extraction = documents.extract(path)
+    rel = vault.relpath(path)
+    if not extraction.searchable:
+        log.info(
+            "no chunks from %s (%s: %s)", rel, extraction.status, extraction.detail
+        )
+        return []
+
+    title = path.stem
+    parent = path.parent
+    if parent.name == settings.doc_files_dir and parent.parent != vault.ROOT:
+        description = parent.parent.name
+    else:
+        description = parent.name
+
+    return [
+        {
+            "path": rel,
+            "title": title,
+            "description": description,
+            "breadcrumb": breadcrumb,
+            "text": body,
+            "embed_text": build_embed_text(title, description, breadcrumb, body),
+            "line": line,
+        }
+        for breadcrumb, line, body in _chunk_spans(extraction.markdown)
     ]

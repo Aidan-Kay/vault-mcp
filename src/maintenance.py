@@ -98,6 +98,14 @@ CHECKS: tuple[Check, ...] = (
         "a note repeats a full heading path, so that section cannot be patched",
     ),
     Check(
+        "check_documents.py",
+        "Filed document conformance",
+        "a document in a Files/ folder has no note linking to it, or a PDF's "
+        "text cannot be extracted so its contents reach no index - either one "
+        "makes the document unreachable; a document outside a Files/ folder is "
+        "a warning and still exits 0",
+    ),
+    Check(
         "check_callouts.py",
         "Callout conformance",
         "a blockquote has no type, carries a type outside the allowed five, or "

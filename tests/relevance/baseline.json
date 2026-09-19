@@ -4,11 +4,11 @@
   "embedder": "hashing",
   "queries_file": "queries.json",
   "aggregate": {
-    "scored_queries": 29,
-    "hits": 29,
+    "scored_queries": 33,
+    "hits": 33,
     "recall": 1.0,
-    "mrr": 0.9828,
-    "mean_max_per_path": 1.138,
+    "mrr": 0.9848,
+    "mean_max_per_path": 1.152,
     "worst_max_per_path": 2
   },
   "queries": {
@@ -82,7 +82,7 @@
     },
     "readings": {
       "rank": 1,
-      "max_per_path": 1
+      "max_per_path": 2
     },
     "renewing": {
       "rank": 1,
@@ -126,7 +126,23 @@
     },
     "energy tariff unit rate": {
       "rank": 1,
+      "max_per_path": 1
+    },
+    "Kestrel Fixed 24": {
+      "rank": 1,
       "max_per_path": 2
+    },
+    "Ashcroft Lane": {
+      "rank": 1,
+      "max_per_path": 1
+    },
+    "when does the cooling off period end": {
+      "rank": 1,
+      "max_per_path": 1
+    },
+    "notice period after probation": {
+      "rank": 1,
+      "max_per_path": 1
     }
   }
 }

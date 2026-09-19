@@ -29,6 +29,7 @@ from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
 from . import callouts
+from . import documents
 from . import maintenance
 from . import operations
 from . import search as search_module
@@ -307,13 +308,18 @@ async def vault_search(query: str, k: int | None = None) -> str:
 
 @mcp.tool()
 def vault_read(path: str, section: str | None = None) -> str:
-    """Read a note from the vault.
+    """Read a note, or the text of a filed document.
+
+    A document - a PDF under a `Files/` folder - comes back as the markdown
+    extracted from it, not as bytes. It has no sections to ask for, because its
+    headings are inferred during extraction rather than written by anyone.
 
     Args:
-        path: Vault-relative path, e.g. "Pets/Levi.md".
-        section: Optional heading name. Returns only that heading's content,
-            down to the next heading of equal or shallower depth. Use this
-            instead of reading whole notes.
+        path: Vault-relative path, e.g. "Pets/Levi.md" or
+            "Home/Utilities/Files/2026-09-17 Kestrel Energy - Contract.pdf".
+        section: Optional heading name, for notes only. Returns just that
+            heading's content, down to the next heading of equal or shallower
+            depth. Use this instead of reading whole notes.
     """
     return _do(vault.read_note, path, section)
 
@@ -347,6 +353,27 @@ def vault_map(path: str) -> str:
         path: Vault-relative path, e.g. "Pets/Levi.md".
     """
     parsed = _do(vault.parse_note, path)
+    if parsed["document"]:
+        extraction = parsed["extraction"]
+        searchable = "yes" if extraction["extracted_chars"] else "NO"
+        return "\n".join(
+            [
+                f"# {parsed['path']}",
+                "",
+                "A filed document, not a note. It can be read, moved and deleted;",
+                "it cannot be patched, appended to, or given frontmatter, because",
+                "there is no markdown source inside it to address.",
+                "",
+                "## Extraction",
+                "",
+                f"- pages: {extraction['pages']}",
+                f"- text layer: {'yes' if extraction['has_text_layer'] else 'no'}",
+                f"- extracted characters: {extraction['extracted_chars']}",
+                f"- searchable: {searchable}",
+                f"- status: {extraction['status']}"
+                + (f" ({extraction['detail']})" if extraction["detail"] else ""),
+            ]
+        )
     lines = [f"# {parsed['path']}", "", "## Frontmatter"]
     if parsed["frontmatter"]:
         for key, value in parsed["frontmatter"].items():
@@ -471,7 +498,10 @@ def vault_set_frontmatter(path: str, key: str, value: str | list | None = None, 
 
 @mcp.tool()
 def vault_delete(path: str) -> str:
-    """Delete a note. There is no trash; the vault's git history is the undo.
+    """Delete a note or a filed document. There is no trash; git is the undo.
+
+    Deleting a document leaves the `## Documents` row in the note that owned it
+    pointing at nothing, so remove that row too.
 
     Args:
         path: Vault-relative path.
@@ -481,14 +511,22 @@ def vault_delete(path: str) -> str:
 
 @mcp.tool()
 def vault_move(source: str, destination: str, update_links: bool = True) -> str:
-    """Move or rename a note and repoint every link to it.
+    """Move or rename a note or a filed document, repointing every link to it.
 
     Moving notes changes the vault's structure, so confirm with the user first.
     index.md follows the move on its own - its headings are the folder tree.
 
+    A document is moved byte for byte and keeps its timestamp; the notes linking
+    to it are what get rewritten. Refiling one - a document filed under the wrong
+    note, or a `Files/` folder that has grown a subject level - is what this is
+    for. A move may not change a file between a note and a document.
+
     Args:
         source: Current vault-relative path.
         destination: New vault-relative path. Parent directories are created.
+            Keep a document inside a folder named `Files`: unlike an upload this
+            is not enforced here, and the vault's checker reports one that is
+            not as misfiled.
         update_links: Rewrite internal links pointing at the old path.
     """
     return _do(operations.move, source, destination, update_links)
@@ -515,6 +553,14 @@ def vault_move(source: str, destination: str, update_links: bool = True) -> str:
 
 async def _body(request: Request) -> str:
     return (await request.body()).decode("utf-8")
+
+
+def _flag(request: Request, name: str) -> bool:
+    """A boolean query parameter, present-but-empty counting as true."""
+    if name not in request.query_params:
+        return False
+    raw = request.query_params[name].strip().lower()
+    return raw in {"", "1", "true", "yes", "on"}
 
 
 def _failed(exc: vault.VaultError) -> PlainTextResponse:
@@ -621,6 +667,16 @@ async def vault_endpoint(request: Request) -> JSONResponse | PlainTextResponse:
         if method == "GET":
             return _structured_read(request, path)
         if method == "PUT":
+            # Dispatched on the suffix, not on Content-Type. n8n sends whatever
+            # the upstream mail server labelled the attachment - and the one
+            # thing the caller is always sure of is the name it chose to file it
+            # under. A misdeclared content type would otherwise decide how the
+            # bytes are stored, which is a decision no header should make.
+            if documents.is_document(path):
+                overwrite = _flag(request, "overwrite")
+                return VaultJSON(
+                    operations.upload(path, await request.body(), overwrite=overwrite)
+                )
             return PlainTextResponse(
                 operations.write(path, await _body(request), overwrite=True)
             )

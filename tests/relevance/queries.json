@@ -1,7 +1,7 @@
 {
   "meta": {
     "corpus": "tests/fixtures/vault",
-    "note": "Expected paths are vault-relative. A query hits when ANY path in `expect` appears in the top k. `never` lists paths that must not appear at all, which is how the SEARCH_EXCLUDE_DIRS decoys are asserted. `arm` says which retrieval arm is supposed to answer: lexical and either are scored, dense is informational under the hashing embedder, threshold is informational until a score floor exists.",
+    "note": "Expected paths are vault-relative, and a path may be a filed document as readily as a note - a PDF under Files/ is indexed under its own path and a hit on one is a hit. A query hits when ANY path in `expect` appears in the top k. `never` lists paths that must not appear at all, which is how the SEARCH_EXCLUDE_DIRS decoys are asserted. `arm` says which retrieval arm is supposed to answer: lexical and either are scored, dense is informational under the hashing embedder, threshold is informational until a score floor exists.",
     "arms": {
       "lexical": "BM25 should answer this outright - an exact identifier",
       "dense": "needs real semantics; informational under the hashing embedder",
@@ -14,24 +14,26 @@
       "q": "KE-8842071",
       "arm": "lexical",
       "expect": [
-        "Home/Utilities/Electricity.md"
+        "Home/Utilities/Electricity.md",
+        "Home/Utilities/Files/2026-09-17 Kestrel Energy - Contract Confirmation.pdf"
       ],
       "never": [
         "Workflows/Email Triage/Email Triage.md"
       ],
-      "why": "Account number. The Workflows decoy carries the same string and is excluded from the index, so a hit there means SEARCH_EXCLUDE_DIRS stopped working."
+      "why": "Account number. It is in the note and in the contract confirmation filed beside it, and both are correct answers - which is what made this the query that found the single-pin defect when documents joined the index. The Workflows decoy carries the same string and is excluded, so a hit there means SEARCH_EXCLUDE_DIRS stopped working."
     },
     {
       "q": "1900012345678",
       "arm": "lexical",
       "expect": [
-        "Home/Utilities/Electricity.md"
+        "Home/Utilities/Electricity.md",
+        "Home/Utilities/Files/2026-09-17 Kestrel Energy - Contract Confirmation.pdf"
       ],
       "never": [
         "Workflows/Email Triage/Email Triage.md",
         "Reports/Vault Maintenance/2026-09-01 Vault Maintenance.md"
       ],
-      "why": "MPAN. Both decoys carry it."
+      "why": "MPAN, in the note and in the contract PDF. Both decoys carry it."
     },
     {
       "q": "VEH-88412",
@@ -319,6 +321,38 @@
       "arm": "threshold",
       "expect": [],
       "why": "Nothing in the corpus answers this. Today five chunks come back regardless; a score floor is what would make the answer an empty list."
+    },
+    {
+      "q": "Kestrel Fixed 24",
+      "arm": "lexical",
+      "expect": [
+        "Home/Utilities/Files/2026-09-17 Kestrel Energy - Contract Confirmation.pdf"
+      ],
+      "why": "The tariff's name appears in the contract PDF and in no note. Unfindable before documents were indexed, which is the point of having filed it."
+    },
+    {
+      "q": "Ashcroft Lane",
+      "arm": "lexical",
+      "expect": [
+        "Home/Utilities/Files/2026-09-17 Kestrel Energy - Contract Confirmation.pdf"
+      ],
+      "why": "The supply address, carried only by the document."
+    },
+    {
+      "q": "when does the cooling off period end",
+      "arm": "either",
+      "expect": [
+        "Home/Utilities/Files/2026-09-17 Kestrel Energy - Contract Confirmation.pdf"
+      ],
+      "why": "A question answered by one line of a filed PDF and by nothing else in the vault."
+    },
+    {
+      "q": "notice period after probation",
+      "arm": "either",
+      "expect": [
+        "Personal/Aidan/Career/Files/2026-04-02 Acme Ltd - Offer Letter.pdf"
+      ],
+      "why": "Employment terms live in the offer letter, not in the career note that links to it."
     }
   ]
 }

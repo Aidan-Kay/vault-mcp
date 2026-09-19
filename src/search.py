@@ -91,7 +91,7 @@ def rarest_term_frequency(doc_freqs: dict[str, int], tokens: list[str]) -> int:
     return min(present) if present else 0
 
 
-def _is_lookup(rarest_matches: int, top_holds_every_term: bool) -> bool:
+def _is_lookup(rarest_matches: int, any_chunk_holds_every_term: bool) -> bool:
     """True when the query names something near-unique that one chunk holds.
 
     Rank fusion alone cannot handle this case. A document found by only one of
@@ -128,7 +128,7 @@ def _is_lookup(rarest_matches: int, top_holds_every_term: bool) -> bool:
     it, however common any single piece is; five words scattered across five
     notes are a question, and the fusion should answer it.
     """
-    return top_holds_every_term and 0 < rarest_matches <= LOOKUP_MAX_MATCHES
+    return any_chunk_holds_every_term and 0 < rarest_matches <= LOOKUP_MAX_MATCHES
 
 
 def per_path_cap(k: int) -> int:
@@ -136,11 +136,48 @@ def per_path_cap(k: int) -> int:
     return max(1, math.ceil(k / MAX_PER_PATH_SHARE))
 
 
+def lookup_hits(
+    chunks: list[dict],
+    term_sets: list[frozenset[str]],
+    tokens: list[str],
+    sparse_ranking: list[int],
+) -> list[int]:
+    """Every chunk that holds the whole query, best first, one per file.
+
+    One per file rather than all of them, and the difference is what filing
+    documents made visible. A 27-page statement can name an account number on
+    every page; returning five chunks of it answers the question five times and
+    hides the note that owns it. One chunk per path says "here is every file
+    that names this thing", which is what a lookup is actually asking.
+
+    It is bounded without needing a bound: _is_lookup has already established
+    that the rarest term appears in at most LOOKUP_MAX_MATCHES chunks, so there
+    are at most that many paths for this to find.
+    """
+    wanted = set(tokens)
+    hits: list[int] = []
+    seen: set[str] = set()
+    for doc in sparse_ranking:
+        if not wanted <= term_sets[doc]:
+            continue
+        path = chunks[doc]["path"]
+        if path in seen:
+            continue
+        seen.add(path)
+        hits.append(doc)
+        if len(seen) >= LOOKUP_MAX_MATCHES:
+            # There cannot be more: the caller has already established that the
+            # rarest term appears in at most this many chunks, so this many
+            # distinct paths is every path there is.
+            break
+    return hits
+
+
 def diversify(
     ranked: list[tuple[int, float]],
     chunks: list[dict],
     k: int,
-    pinned: int | None = None,
+    pinned: list[int] | None = None,
 ) -> list[tuple[int, float]]:
     """Choose k results by maximal marginal relevance over the source note.
 
@@ -150,10 +187,18 @@ def diversify(
     nothing, and stays meaningful under the stub embedder the relevance suite
     runs with, where a vector comparison would not.
 
-    `pinned` is the lookup override's hit. It is taken first and exempt from
-    diversification: if the query is a policy number, one exact hit is the
-    answer and diversity is noise. Its note still counts against the cap, so a
-    pin does not buy that note a second slot it would not otherwise have had.
+    `pinned` is the lookup override's hits, best first. They are taken first and
+    exempt from diversification: if the query is a policy number, the exact hits
+    are the answer and diversity is noise. Their notes still count against the
+    cap, so a pin does not buy a note a second slot it would not otherwise have
+    had.
+
+    It became a list when documents joined the index, because the case it could
+    not express turned out to be the ordinary one: an account number lives in
+    the note *and* in the bill filed beside it. Pinning only BM25's best of the
+    two left the other to compete on fused score alone, and a provable
+    identifier lookup went from rank one to missing entirely - the eval caught
+    it on the fixture before any of this was deployed.
 
     It keeps its *own* fused score. It used to be handed ranked[0][1] - another
     chunk's score, a fused value belonging to a document that had just lost its
@@ -174,8 +219,18 @@ def diversify(
         path = chunks[doc]["path"]
         taken[path] = taken.get(path, 0) + 1
 
-    if pinned is not None and pinned in scores:
-        take(pinned, scores[pinned])
+    # Taken in the order given, which is BM25's. Re-sorting them by fused score
+    # was tried and is worse: 'Poly1305' appears in two notes, the one that
+    # defines it scores 7.57 on BM25 and 0.333 fused, the one that mentions it
+    # in passing 5.93 and 0.790. The override fires on lexical evidence, so the
+    # set it pins is ordered by lexical evidence - handing that ordering back to
+    # the fusion asks the ranker that could not tell them apart to arbitrate
+    # between the two it was overruled on.
+    for doc in pinned or ():
+        if len(chosen) >= k:
+            break
+        if doc in scores and doc not in used:
+            take(doc, scores[doc])
 
     while len(chosen) < k:
         best: tuple[int, float] | None = None
@@ -229,12 +284,14 @@ async def search(index: VaultIndex, embedder: Embedder, query: str, k: int) -> l
 
     ranked = fuse(dense_ranking, sparse_ranking)
 
-    pinned = None
-    if sparse_ranking:
-        # One tokenise of one chunk, and only when there is something to pin.
-        holds_all = set(tokens) <= chunk_terms(index.chunks[sparse_ranking[0]])
-        if _is_lookup(rarest, holds_all):
-            pinned = sparse_ranking[0]
+    pinned: list[int] = []
+    # The rarest-term test first, because it is two dict lookups and the
+    # containment test is a scan. Most queries are questions whose commonest
+    # term is everywhere, so they fail here and never pay for the scan.
+    if sparse_ranking and tokens and 0 < rarest <= LOOKUP_MAX_MATCHES:
+        holders = lookup_hits(index.chunks, index.term_sets, tokens, sparse_ranking)
+        if _is_lookup(rarest, bool(holders)):
+            pinned = holders
 
     results: list[dict] = []
     for doc, score in diversify(ranked, index.chunks, k, pinned):

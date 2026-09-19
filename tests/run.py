@@ -43,7 +43,7 @@ VAULT_READERS = ("resolve_all", "resolve_leaves", "primitives")
 # retrieval go further and never touch the tree at all, because they test
 # functions that take text rather than paths. They point VAULT_PATH at an empty
 # one only because src.config refuses to resolve without it.
-SELF_CONTAINED = ("write_scope", "chunker", "retrieval", "indexdoc", "rest")
+SELF_CONTAINED = ("write_scope", "documents", "chunker", "retrieval", "indexdoc", "rest")
 
 RELEVANCE = ("relevance.eval",)
 

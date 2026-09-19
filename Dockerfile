@@ -26,6 +26,21 @@ WORKDIR /app
 COPY --from=builder /src/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
+# OCR for documents that arrive as scans, which is what utility providers email.
+# Tesseract is not a Python dependency and does not arrive with the wheel: it is
+# a binary PyMuPDF shells out to, plus its language data. Without it a scanned
+# bill files correctly and extracts to nothing, which src/documents.py reports
+# as `needs_ocr` rather than as success - so the image is usable without this
+# layer, it just cannot read scans. Set DOC_OCR=false to stop it trying.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng && \
+    rm -rf /var/lib/apt/lists/*
+# TESSDATA_PREFIX is deliberately not set. PyMuPDF returns that variable
+# verbatim when it is set, without checking the directory exists, so a path
+# hardcoded here that a future base image moves would look configured and fail
+# at OCR time. Unset, it asks `tesseract --list-langs` where its own data is,
+# which is authoritative and survives the upgrade.
+
 COPY --from=builder /src/src/ ./src/
 
 # AGPL-3.0: the licence travels with the binary, so a running container can answer
