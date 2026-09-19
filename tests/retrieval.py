@@ -84,6 +84,40 @@ def normalisation() -> None:
     check("the order still descends", [s for _, s in ranked] == sorted((s for _, s in ranked), reverse=True), True)
 
 
+def lookup_override() -> None:
+    """The rule that decides whether BM25's top hit is pinned to rank one.
+
+    Both halves are here because each one alone was measured and found wrong.
+    Counting the union over the query's terms missed identifiers that split into
+    one rare piece and one common one; counting only the rarest term fired on 35
+    of 36 fixture queries, since "at most five chunks" means something different
+    in a 59-chunk corpus than in a 2102-chunk one.
+    """
+    freqs = {"ke": 203, "8842071": 1, "renew": 88, "solar": 1, "tariff": 140}
+
+    check("the rarest term decides", search.rarest_term_frequency(freqs, ["ke", "8842071"]), 1)
+    check(
+        "a term the corpus has never seen is skipped, not counted as zero",
+        search.rarest_term_frequency(freqs, ["8842071", "absent"]),
+        1,
+    )
+    check("no term matches at all", search.rarest_term_frequency(freqs, ["absent"]), 0)
+    check("no terms at all", search.rarest_term_frequency(freqs, []), 0)
+
+    # The real-vault regression: a MAC address or spec code whose rarest piece
+    # is unique and whose commonest is everywhere. The union said 621; the
+    # rarest says 1, and the chunk holds every piece.
+    check("one rare piece and one common one is still a lookup", search._is_lookup(1, True), True)
+    # And the other direction: 'Marrowby Energy solar export tariff' has a term
+    # appearing exactly once, but no chunk holds all five words. Nothing in the
+    # corpus answers it and nothing should be pinned.
+    check("a rare word alone does not make a lookup", search._is_lookup(1, False), False)
+    check("a common term in one chunk is not a lookup", search._is_lookup(500, True), False)
+    check("nothing matched, nothing pinned", search._is_lookup(0, True), False)
+    check("exactly at the threshold still counts", search._is_lookup(search.LOOKUP_MAX_MATCHES, True), True)
+    check("one past it does not", search._is_lookup(search.LOOKUP_MAX_MATCHES + 1, True), False)
+
+
 def caps() -> None:
     check("k=5 caps a note at two slots", search.per_path_cap(5), 2)
     check("k=1 still allows one", search.per_path_cap(1), 1)
@@ -164,6 +198,7 @@ def backfill() -> None:
 def main() -> int:
     tokeniser()
     normalisation()
+    lookup_override()
     caps()
     selection()
     pinning()

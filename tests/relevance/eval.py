@@ -46,10 +46,21 @@ DEFAULT_VAULT = REPO / "tests" / "fixtures" / "vault"
 DEFAULT_QUERIES = Path(__file__).parent / "queries.json"
 DEFAULT_BASELINE = Path(__file__).parent / "baseline.json"
 
-# Arms whose result decides the exit code. The others are printed and ignored:
-# `dense` because the hashing embedder has no semantics to test, `threshold`
-# because there is no score floor yet for it to pass.
-SCORED_ARMS = frozenset({"lexical", "either"})
+def scored_arms(embedder: str) -> frozenset[str]:
+    """Which arms decide the exit code, which depends on the embedder.
+
+    `dense` is unscored under the hashing stub because the stub has no
+    semantics: scoring it would measure the hash function, and a green run would
+    say nothing about retrieval. Under the real embedder that reasoning is
+    gone - it is then the arm most worth scoring, and leaving it out is how a
+    dense regression ships unnoticed.
+
+    `threshold` stays out either way. There is no score floor yet for it to pass.
+    """
+    arms = {"lexical", "either"}
+    if embedder == "ollama":
+        arms.add("dense")
+    return frozenset(arms)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -85,6 +96,8 @@ if not ARGS.vault.is_dir():
     sys.exit(f"--vault {ARGS.vault} is not a directory")
 os.environ["VAULT_PATH"] = str(ARGS.vault.resolve())
 os.environ.setdefault("VAULT_MCP_API_KEY", "eval")
+
+SCORED_ARMS = scored_arms(ARGS.embedder)
 
 from src import search as search_module  # noqa: E402
 from src.config import settings  # noqa: E402

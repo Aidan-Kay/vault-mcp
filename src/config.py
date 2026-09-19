@@ -101,7 +101,7 @@ def load() -> Settings:
         chunk_target_tokens=_int("CHUNK_TARGET_TOKENS", 400),
         chunk_overlap_tokens=_int("CHUNK_OVERLAP_TOKENS", 60),
         chunk_min_tokens=_int("CHUNK_MIN_TOKENS", 120),
-        search_default_k=_int("SEARCH_DEFAULT_K", 5),
+        search_default_k=_int("SEARCH_DEFAULT_K", 6),
         embed_batch_size=_int("EMBED_BATCH_SIZE", 64),
         embed_dims=_int("EMBED_DIMS", 768),
         watch_debounce_seconds=_float("WATCH_DEBOUNCE_SECONDS", 2.0),

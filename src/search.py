@@ -17,7 +17,7 @@ import math
 import numpy as np
 
 from .embedder import Embedder
-from .index import VaultIndex, tokenize
+from .index import VaultIndex, chunk_terms, tokenize
 
 RRF_K = 60
 CANDIDATES = 50
@@ -28,9 +28,9 @@ CANDIDATES = 50
 # certbot renewal as readily as insurance renewal).
 SPARSE_WEIGHT = 0.5
 
-# If the query's terms appear in no more than this many chunks corpus-wide, the
-# query is a lookup rather than a question - a reg plate, a licence key, a part
-# code - and the lexical hit is the answer. See _is_lookup.
+# If the *rarest* of the query's terms appears in no more than this many chunks,
+# the query is a lookup rather than a question - a reg plate, a licence key, a
+# part code - and the lexical hit is the answer. See _is_lookup.
 LOOKUP_MAX_MATCHES = 5
 
 # The largest weighted RRF sum on offer: rank one in both lists. Dividing by it
@@ -80,8 +80,19 @@ def fuse(dense: list[int], sparse: list[int]) -> list[tuple[int, float]]:
     return sorted(((doc, s / RRF_MAX) for doc, s in scores.items()), key=lambda item: -item[1])
 
 
-def _is_lookup(lexical_matches: int) -> bool:
-    """True when the query's terms are near-unique in the corpus.
+def rarest_term_frequency(doc_freqs: dict[str, int], tokens: list[str]) -> int:
+    """How many chunks hold the least common of the query's terms.
+
+    Terms the corpus has never seen are skipped rather than counted as zero, so
+    that pairing an identifier with a word the vault does not contain still
+    reads as a lookup for the identifier.
+    """
+    present = [doc_freqs[token] for token in tokens if doc_freqs.get(token)]
+    return min(present) if present else 0
+
+
+def _is_lookup(rarest_matches: int, top_holds_every_term: bool) -> bool:
+    """True when the query names something near-unique that one chunk holds.
 
     Rank fusion alone cannot handle this case. A document found by only one of
     the two rankers scores 1/(RRF_K+1) whichever ranker found it, so BM25's
@@ -91,8 +102,33 @@ def _is_lookup(lexical_matches: int) -> bool:
     tie must be resolved in favour of the lexical hit - but only when the match
     is genuinely near-unique, or the same rule would promote an incidental
     keyword hit over a correct semantic one.
+
+    This asks about the rarest term, where it used to ask about the union over
+    all of them - how many chunks matched *any* query term. The union is a
+    different quantity, and it made the rule fail in both directions at once.
+    An identifier that tokenises into one rare piece and one common one - a MAC
+    address, a spec code, a hyphenated part number - would push the union into
+    the hundreds and the override would not fire, which is how two provable
+    identifier lookups missed entirely against the real vault: their rarest
+    piece appeared in exactly one chunk, their commonest in 203 and 621. In the
+    other direction the union was small for any short question the vault mostly
+    did not answer, so 'what has gone wrong with the car' pinned the car
+    insurance note and a query nothing answered still pinned something.
+
+    The rarest term alone is not enough either, and the fixture said so before
+    this shipped: it fired on 35 of 36 queries, because "appears in at most five
+    chunks" is a different claim in a 59-chunk corpus than in a 2102-chunk one,
+    where it is most content words rather than few. Lowering the threshold does
+    not separate them - 'escape of water claim' and a query the vault cannot
+    answer at all both contain a term appearing exactly once.
+
+    So the second half: the chunk about to be pinned must contain *every* term
+    of the query. That is the difference between naming a thing and sharing a
+    word with one. An identifier's pieces all live in the one chunk that holds
+    it, however common any single piece is; five words scattered across five
+    notes are a question, and the fusion should answer it.
     """
-    return 0 < lexical_matches <= LOOKUP_MAX_MATCHES
+    return top_holds_every_term and 0 < rarest_matches <= LOOKUP_MAX_MATCHES
 
 
 def per_path_cap(k: int) -> int:
@@ -177,12 +213,13 @@ async def search(index: VaultIndex, embedder: Embedder, query: str, k: int) -> l
     dense_ranking = _top_indices(index.matrix @ query_vector, CANDIDATES)
 
     sparse_ranking: list[int] = []
-    lexical_matches = 0
+    tokens: list[str] = []
+    rarest = 0
     if index.bm25 is not None:
         tokens = tokenize(query)
         if tokens:
             sparse_scores = np.asarray(index.bm25.get_scores(tokens))
-            lexical_matches = int((sparse_scores > 0).sum())
+            rarest = rarest_term_frequency(index.doc_freqs, tokens)
             # Drop non-matching candidates. argpartition returns a full window
             # regardless of score, so without this a query matching nothing
             # lexically contributes 50 arbitrary votes to the fusion.
@@ -191,7 +228,13 @@ async def search(index: VaultIndex, embedder: Embedder, query: str, k: int) -> l
             ]
 
     ranked = fuse(dense_ranking, sparse_ranking)
-    pinned = sparse_ranking[0] if sparse_ranking and _is_lookup(lexical_matches) else None
+
+    pinned = None
+    if sparse_ranking:
+        # One tokenise of one chunk, and only when there is something to pin.
+        holds_all = set(tokens) <= chunk_terms(index.chunks[sparse_ranking[0]])
+        if _is_lookup(rarest, holds_all):
+            pinned = sparse_ranking[0]
 
     results: list[dict] = []
     for doc, score in diversify(ranked, index.chunks, k, pinned):

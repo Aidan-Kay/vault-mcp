@@ -106,17 +106,23 @@ that decide what a caller actually sees.
   first", `0.67` as "dense alone did" and `0.33` as "BM25 alone did". It is still not a
   probability and should not be read as one, but it is at least the same scale twice.
 - **No note may hold more than a third of the results.** A note that chunks six ways
-  could take every slot at `SEARCH_DEFAULT_K=5` and hide five other notes that answered;
+  could take every slot at the default `k` and hide every other note that answered;
   results are now picked by maximal marginal relevance under a cap of `ceil(k/3)`. The
   cap is a ceiling rather than a quota — when other notes are competitive the diversity
   term spends the slots on them and the cap never binds — and it reorders rather than
   truncates, so a query whose only answers live in one note still gets `k` of them.
-- **The lookup override keeps its own score.** When a query's terms are near-unique in
-  the corpus, BM25's top hit is pinned to rank one and exempted from diversification: if
-  the query is a policy number, one exact hit is the answer and diversity is noise. It
-  used to be handed the score of the chunk it displaced. Now it carries its own, which
-  means the returned scores do not always descend — the honest picture, since the
-  override moved a chunk on evidence the fusion does not hold.
+- **A query that names one thing is answered by that thing.** When the rarest of a
+  query's terms appears in at most five chunks *and* one chunk holds every term, BM25's
+  top hit is pinned to rank one and exempted from diversification: if the query is a
+  policy number, one exact hit is the answer and diversity is noise. Both halves are
+  load-bearing. Asking about the rarest term rather than the union over all of them is
+  what lets a hyphenated part number match when one of its pieces is common — measured
+  against the real vault, that alone moved five identifier lookups from missing to rank
+  one. Requiring one chunk to hold every term is what stops a question that merely
+  contains an unusual word pinning whichever note happens to use it. The pinned hit
+  carries its own fused score rather than the score of the chunk it displaced, so the
+  returned scores do not always descend — the honest picture, since the override moved a
+  chunk on evidence the fusion does not hold.
 
 Two things feed it that are worth knowing about:
 
@@ -198,7 +204,7 @@ server refuses to start without it rather than treating an empty key as "auth of
 | `CHUNK_TARGET_TOKENS` | `400` | Target chunk size |
 | `CHUNK_OVERLAP_TOKENS` | `60` | Overlap between chunks |
 | `CHUNK_MIN_TOKENS` | `120` | Below this, a chunk merges into its neighbour |
-| `SEARCH_DEFAULT_K` | `5` | Default result count |
+| `SEARCH_DEFAULT_K` | `6` | Default result count |
 | `WATCH_DEBOUNCE_SECONDS` | `2.0` | Filesystem-watch debounce before reindexing |
 | `BIND_HOST` / `BIND_PORT` | `0.0.0.0` / `8080` | Listen address |
 

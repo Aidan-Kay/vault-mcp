@@ -1,5 +1,5 @@
 {
-  "k": 5,
+  "k": 6,
   "vault": "vault",
   "embedder": "hashing",
   "queries_file": "queries.json",
@@ -8,7 +8,7 @@
     "hits": 29,
     "recall": 1.0,
     "mrr": 0.9828,
-    "mean_max_per_path": 1.103,
+    "mean_max_per_path": 1.138,
     "worst_max_per_path": 2
   },
   "queries": {
@@ -126,7 +126,7 @@
     },
     "energy tariff unit rate": {
       "rank": 1,
-      "max_per_path": 1
+      "max_per_path": 2
     }
   }
 }

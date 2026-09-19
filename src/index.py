@@ -10,6 +10,7 @@ import logging
 import re
 import threading
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -84,6 +85,15 @@ def _bm25_document(chunk: dict) -> list[str]:
     return tokenize(f"{chunk['title']} {chunk['breadcrumb']} {chunk['text']}")
 
 
+def chunk_terms(chunk: dict) -> frozenset[str]:
+    """The distinct terms one chunk contributes to the lexical index.
+
+    Exposed for the lookup override, which has to ask whether one chunk holds
+    every term of a query rather than merely scoring well on some of them.
+    """
+    return frozenset(_bm25_document(chunk))
+
+
 @dataclass(slots=True)
 class VaultIndex:
     matrix: np.ndarray  # (N, 768) float32, C-contiguous, L2-normalised
@@ -92,10 +102,18 @@ class VaultIndex:
     build_seconds: float = 0.0
     note_count: int = 0
     built_at: float = field(default_factory=time.time)
+    # term -> how many chunks hold it. Built here rather than read back out of
+    # BM25Okapi, whose per-term counts are an implementation detail, and cached
+    # rather than derived per query: asking rank_bm25 for one term's frequency
+    # costs a pass over the whole corpus, and the lookup override asks once per
+    # term of every query.
+    doc_freqs: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.bm25 is None and self.chunks:
-            self.bm25 = BM25Okapi([_bm25_document(c) for c in self.chunks])
+            documents = [_bm25_document(c) for c in self.chunks]
+            self.bm25 = BM25Okapi(documents)
+            self.doc_freqs = Counter(term for document in documents for term in set(document))
 
     @property
     def size(self) -> int:
