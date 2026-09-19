@@ -5,11 +5,11 @@
   "queries_file": "queries.json",
   "aggregate": {
     "scored_queries": 29,
-    "hits": 27,
-    "recall": 0.931,
-    "mrr": 0.8966,
-    "mean_max_per_path": 1.414,
-    "worst_max_per_path": 4
+    "hits": 29,
+    "recall": 1.0,
+    "mrr": 0.9828,
+    "mean_max_per_path": 1.103,
+    "worst_max_per_path": 2
   },
   "queries": {
     "KE-8842071": {
@@ -22,7 +22,7 @@
     },
     "VEH-88412": {
       "rank": 1,
-      "max_per_path": 2
+      "max_per_path": 1
     },
     "HM-4471902-C": {
       "rank": 1,
@@ -34,7 +34,7 @@
     },
     "T4204X14-889201": {
       "rank": 1,
-      "max_per_path": 2
+      "max_per_path": 1
     },
     "Calderon Optima 832": {
       "rank": 1,
@@ -54,11 +54,11 @@
     },
     "RK-99182374": {
       "rank": 1,
-      "max_per_path": 2
+      "max_per_path": 1
     },
     "NX8010-4471290": {
       "rank": 1,
-      "max_per_path": 2
+      "max_per_path": 1
     },
     "E12N4471088": {
       "rank": 1,
@@ -81,16 +81,16 @@
       "max_per_path": 1
     },
     "readings": {
-      "rank": null,
+      "rank": 1,
       "max_per_path": 1
     },
     "renewing": {
-      "rank": null,
+      "rank": 1,
       "max_per_path": 1
     },
     "cambelt due": {
       "rank": 1,
-      "max_per_path": 2
+      "max_per_path": 1
     },
     "escape of water claim": {
       "rank": 1,
@@ -101,7 +101,7 @@
       "max_per_path": 1
     },
     "gutter overflows above the back door": {
-      "rank": 2,
+      "rank": 1,
       "max_per_path": 1
     },
     "smoke alarm battery": {
@@ -114,7 +114,7 @@
     },
     "ZFS snapshot retention": {
       "rank": 2,
-      "max_per_path": 2
+      "max_per_path": 1
     },
     "Backups": {
       "rank": 1,
@@ -122,11 +122,11 @@
     },
     "Vantor T60": {
       "rank": 1,
-      "max_per_path": 4
+      "max_per_path": 2
     },
     "energy tariff unit rate": {
       "rank": 1,
-      "max_per_path": 2
+      "max_per_path": 1
     }
   }
 }

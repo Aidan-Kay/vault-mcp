@@ -4,9 +4,9 @@
     python -m tests.run --real-vault    # point the vault readers at VAULT_PATH
     python -m tests.run resolve_all rest
 
-Until now the suite was six scripts and a README listing them, which means it was
-six things to remember rather than one thing to run, and nothing in the repo could
-fail as a unit. This is that one thing.
+Until now the suite was a set of scripts and a README listing them, which means it
+was several things to remember rather than one thing to run, and nothing in the
+repo could fail as a unit. This is that one thing.
 
 One subprocess per script, not one process, and that is not incidental:
 `src.config` resolves settings at import and `tests/indexdoc.py` points VAULT_PATH
@@ -39,8 +39,11 @@ FIXTURE = REPO / "tests" / "fixtures" / "vault"
 VAULT_READERS = ("resolve_all", "resolve_leaves", "primitives")
 
 # Scripts that build their own temp vault at import. VAULT_PATH is irrelevant to
-# them, and passing one would be misleading rather than harmful.
-SELF_CONTAINED = ("write_scope", "indexdoc", "rest")
+# them, and passing one would be misleading rather than harmful - chunker and
+# retrieval go further and never touch the tree at all, because they test
+# functions that take text rather than paths. They point VAULT_PATH at an empty
+# one only because src.config refuses to resolve without it.
+SELF_CONTAINED = ("write_scope", "chunker", "retrieval", "indexdoc", "rest")
 
 RELEVANCE = ("relevance.eval",)
 

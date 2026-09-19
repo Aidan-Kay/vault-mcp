@@ -7,3 +7,7 @@ __pycache__/
 # tests/relevance/eval.py takes --queries and --baseline for exactly this reason.
 tests/relevance/private*.json
 !tests/relevance/private.example.json
+
+# Planning and design notes - the comparison, the plan and its decision records.
+# Kept alongside the code rather than published with it.
+docs/

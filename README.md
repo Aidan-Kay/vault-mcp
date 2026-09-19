@@ -94,6 +94,47 @@ Both surfaces call `src/operations.py`, so the resolver and the vault convention
 applied once regardless of how the caller arrived. Every write bumps the note's
 `timestamp`, or reports why it could not.
 
+## How a search result is chosen
+
+Fusing the two arms is not the last step, and the three steps after it are the ones
+that decide what a caller actually sees.
+
+- **Fused scores are normalised to `(0, 1]`.** A weighted RRF sum has no meaning on
+  its own — the top score used to be about `0.025` and was comparable with nothing, not
+  even with the same query run yesterday. Each sum is now divided by the largest one
+  available, which is rank one in both arms, so `1.0` reads as "both arms ranked it
+  first", `0.67` as "dense alone did" and `0.33` as "BM25 alone did". It is still not a
+  probability and should not be read as one, but it is at least the same scale twice.
+- **No note may hold more than a third of the results.** A note that chunks six ways
+  could take every slot at `SEARCH_DEFAULT_K=5` and hide five other notes that answered;
+  results are now picked by maximal marginal relevance under a cap of `ceil(k/3)`. The
+  cap is a ceiling rather than a quota — when other notes are competitive the diversity
+  term spends the slots on them and the cap never binds — and it reorders rather than
+  truncates, so a query whose only answers live in one note still gets `k` of them.
+- **The lookup override keeps its own score.** When a query's terms are near-unique in
+  the corpus, BM25's top hit is pinned to rank one and exempted from diversification: if
+  the query is a policy number, one exact hit is the answer and diversity is noise. It
+  used to be handed the score of the chunk it displaced. Now it carries its own, which
+  means the returned scores do not always descend — the honest picture, since the
+  override moved a chunk on evidence the fusion does not hold.
+
+Two things feed it that are worth knowing about:
+
+- **The lexical arm stems.** `tokenize()` lowercases, splits on anything outside
+  `[a-z0-9]`, drops stop words and runs Porter2, so "readings" finds a note that only
+  ever writes "reading" and "renewing" finds one that writes "renewal". The deliberate
+  part stays: `nomic-embed-text` is still three tokens, and the stemmer leaves `nomic`
+  and every identifier alone.
+- **A section that is one flat list chunks per item.** A log, an inbox or a list of
+  twelve unrelated bullets under one heading would otherwise become one embedding
+  averaging twelve subjects. Most lists are not that, so the rule asks for seven
+  items, one list rather than two, bullets rather than numbers, a median item of at
+  least eight tokens, and something left over once the links are stripped out. Each of
+  those is a shape this vault holds: a recipe method is a sequence and step four
+  answers nothing alone, a list of film titles is a register of names rather than of
+  subjects, `## Related notes` is four pointers, and a `## Account` block is four
+  fields. All of them stay whole; the house log does not.
+
 ## The index is generated
 
 The vault's root `index.md` is one line per note — its title, a link, and its
@@ -234,6 +275,8 @@ python -m tests.primitives
 python -m tests.resolve_all
 python -m tests.resolve_leaves
 python -m tests.write_scope
+python -m tests.chunker
+python -m tests.retrieval
 python -m tests.indexdoc
 python -m tests.rest
 python -m tests.relevance.eval
@@ -244,7 +287,10 @@ That is not tidiness: `src.config` resolves settings at import and `tests.indexd
 points `VAULT_PATH` at a temp tree before importing `src`, so two scripts wanting two
 different vaults cannot share an interpreter.
 
-`write_scope`, `indexdoc` and `rest` build their own temp vault. `primitives`,
+`write_scope`, `indexdoc` and `rest` build their own temp vault. `chunker` and
+`retrieval` need no vault at all — they test functions that take text rather than
+paths — and point `VAULT_PATH` at an empty temp tree only because `src.config`
+refuses to resolve without one. `primitives`,
 `resolve_all` and `resolve_leaves` read a vault and assert against what is in it —
 which used to mean the real vault, and now means
 [`tests/fixtures/vault`](tests/fixtures/vault) unless you pass `--real-vault`. The
@@ -283,6 +329,12 @@ real embedder are a local run against a query set that stays out of git, because
 queries name real accounts — see
 [`tests/relevance/private.example.json`](tests/relevance/private.example.json).
 
+`tests.chunker` and `tests.retrieval` are the unit half of the retrieval work: the
+relevance suite says whether retrieval got better, these say why. They carry the cases
+the fixture corpus cannot reach — 27 notes never exhaust their candidates, so the cap's
+backfill branch never runs there, and a branch nobody has seen run is not known to work.
+Both were checked against six mutations of the code they cover; each one failed them.
+
 `tests.rest` drives the REST surface through the real app — the structured read, the
 frontmatter `PATCH` that is the claim in claim-before-act and the `delete` that removes a
 field, the body `PATCH` that leaves the block alone, the frontmatter query, that a
@@ -300,10 +352,10 @@ AGPL-3.0-or-later. See [LICENSE](LICENSE).
 
 Copyright (C) 2026 Aidan Kay.
 
-The copyleft is deliberate rather than inherited. The source-document work in
-[docs/plan-of-action.md](docs/plan-of-action.md) will extract PDFs with
-[PyMuPDF](https://pymupdf.readthedocs.io/), which Artifex dual-licenses under AGPL-3.0
-or a commercial licence; taking the AGPL half means this project takes it too. That was
+The copyleft is deliberate rather than inherited. The source-document work planned for
+this project will extract PDFs with [PyMuPDF](https://pymupdf.readthedocs.io/), which
+Artifex dual-licenses under AGPL-3.0 or a commercial licence; taking the AGPL half means
+this project takes it too. That was
 the occasion for licensing the repo at all, rather than leaving it public and
 all-rights-reserved, which is what it was before.
 

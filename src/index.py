@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
+import snowballstemmer
 from rank_bm25 import BM25Okapi
 
 from . import chunker, vault
@@ -23,11 +25,57 @@ log = logging.getLogger(__name__)
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
+# Snowball's English stop list, minus the contraction forms _TOKEN_RE can never
+# produce. These are the words whose presence in a query says nothing about
+# which note answers it, and whose presence in the corpus is near-universal.
+STOP_WORDS = frozenset(
+    """
+    i me my myself we us our ours ourselves you your yours yourself yourselves
+    he him his himself she her hers herself it its itself they them their theirs
+    themselves what which who whom this that these those am is are was were be
+    been being have has had having do does did doing would should could ought
+    a an the and but if or because as until while of at by for with about
+    against between into through during before after above below to from up
+    down in out on off over under again further then once here there when where
+    why how all any both each few more most other some such no nor not only own
+    same so than too very will
+    """.split()
+)
+
+# snowballstemmer's stemmers carry a cursor across a call, so one shared object
+# is not safe to hand to two threads. One per thread costs an attribute lookup
+# and removes the question.
+_LOCAL = threading.local()
+
+
+def _stemmer() -> snowballstemmer.stemmer:
+    stemmer = getattr(_LOCAL, "stemmer", None)
+    if stemmer is None:
+        stemmer = _LOCAL.stemmer = snowballstemmer.stemmer("english")
+    return stemmer
+
 
 def tokenize(text: str) -> list[str]:
-    """Deliberately naive: splitting 'nomic-embed-text' into three tokens beats
-    keeping it whole, because a query for one part should still match."""
-    return _TOKEN_RE.findall(text.lower())
+    """Lowercase, split on anything that is not [a-z0-9], drop stop words, stem.
+
+    Splitting stays deliberately naive: 'nomic-embed-text' becomes three tokens
+    rather than one, because a query for any part should still match. The
+    stemmer leaves 'nomic' alone and treats 'embed' and 'text' the same way on
+    both sides of the index, so it does not disturb that decision.
+
+    What it does fix is the arm this corpus leans on hardest. Without a stemmer
+    'readings' does not find a note that only ever writes 'reading', and
+    'renewing' does not find one that writes 'renewal' - two misses the
+    relevance fixture carried on purpose until this landed.
+
+    Index and query go through this one function, which is the only arrangement
+    that cannot drift: a word stemmed on one side and not the other is a term
+    that matches nothing.
+    """
+    words = [w for w in _TOKEN_RE.findall(text.lower()) if w not in STOP_WORDS]
+    # Filtered again after stemming, because some stop words only become one
+    # there: 'having' -> 'have', 'doing' -> 'do'.
+    return [s for s in _stemmer().stemWords(words) if s not in STOP_WORDS]
 
 
 def _bm25_document(chunk: dict) -> list[str]:
