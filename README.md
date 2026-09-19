@@ -332,7 +332,7 @@ server refuses to start without it rather than treating an empty key as "auth of
 | `EMBED_MAX_ATTEMPTS` | `5` | Attempts per embedding batch before giving up |
 | `EMBED_BACKOFF_SECONDS` | `1.0` | First wait between attempts; it doubles from there |
 | `EMBED_BACKOFF_MAX_SECONDS` | `30.0` | Ceiling on that doubling |
-| `INDEX_CACHE_PATH` | `$XDG_CACHE_HOME/vault-mcp/index.npz` | Chunk-and-vector cache. Empty disables it. |
+| `INDEX_CACHE_PATH` | `/cache/index.npz` in the image, `$XDG_CACHE_HOME/vault-mcp/index.npz` otherwise | Chunk-and-vector cache. Empty disables it. |
 | `INDEX_CACHE_FLUSH_SECONDS` | `60.0` | How often an edited cache is written back. `0` writes at build and shutdown only. |
 | `SEARCH_EXCLUDE_DIRS` | `Workflows,Reports,.obsidian` | Folder *names*, left out of the search index |
 | `INDEX_EXCLUDE_DIRS` | the six generated series | Folder *paths*, left out of `index.md` |
