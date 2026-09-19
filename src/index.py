@@ -259,9 +259,16 @@ class VaultIndex:
         index = cls(
             matrix=np.ascontiguousarray(matrix),
             chunks=chunks,
-            build_seconds=time.perf_counter() - started,
             note_count=len(notes),
         )
+        # Assigned after construction rather than passed in, because an argument
+        # is evaluated before __post_init__ - and __post_init__ is where the BM25
+        # model and the token lists are built. Passing it in was a 12% error on a
+        # 40s cold build, where embedding dominated, and became a 27x one the
+        # moment the cache removed the embedding: the server reported 0.12s for a
+        # warm start that took 3.28s by its own log timestamps. /readyz publishes
+        # this number, so it has to mean the whole build.
+        index.build_seconds = time.perf_counter() - started
         if cache is None:
             log.info("index built: %s", index.summary())
         else:

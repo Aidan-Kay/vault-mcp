@@ -568,6 +568,57 @@ def incremental_tokenising() -> None:
     target.write_text(original, encoding="utf-8")
 
 
+# --------------------------------------------------------------------------
+# 10  The number /readyz publishes
+# --------------------------------------------------------------------------
+
+
+def build_seconds_covers_the_build() -> None:
+    """build_seconds has to mean the whole build, including the BM25 model.
+
+    It did not. It was passed as an argument to the constructor, so it was
+    evaluated before __post_init__ - and __post_init__ is where the tokenising
+    and the BM25 model happen. On a cold build, where embedding dominated, that
+    was a 12% under-report nobody would notice. With the cache it is most of the
+    work: the server logged a warm start taking 3.28s and reported 0.12s on the
+    readiness endpoint.
+
+    Asserted by making __post_init__ take a known minimum rather than by timing
+    the real thing. A sleep is a floor, so the check cannot flake on a slow
+    machine - it can only fail if the span genuinely excludes the delay.
+    """
+    import time as timing
+
+    from src import index as index_module
+
+    cache = fresh_cache()
+    build(cache)
+    cache.save()
+
+    injected = 0.004
+    real = index_module._bm25_document
+
+    def slow(chunk: dict) -> list[str]:
+        timing.sleep(injected)
+        return real(chunk)
+
+    index_module._bm25_document = slow
+    try:
+        # A warm build, so tokenising is nearly all of the work that is left and
+        # the floor below is not competing with chunking or embedding.
+        warm, embedder = build(fresh_cache())
+    finally:
+        index_module._bm25_document = real
+
+    floor = injected * len(warm.chunks)
+    check("nothing was embedded, so the delay is the build", embedder.texts, 0)
+    check(
+        f"build_seconds ({warm.build_seconds:.3f}s) covers __post_init__ (>= {floor:.3f}s)",
+        warm.build_seconds >= floor,
+        True,
+    )
+
+
 def main() -> int:
     transparency()
     one_edit()
@@ -579,6 +630,7 @@ def main() -> int:
     disabled()
     on_disk()
     incremental_tokenising()
+    build_seconds_covers_the_build()
 
     if report():
         return 1

@@ -265,6 +265,10 @@ changed, keyed by content, in a single file outside the vault:
 | warm | **7.8 s** |
 | after a chunker change | **17.3 s** |
 
+Measured from a development machine reading the vault over a network mount, where the
+walk and the per-file `resolve()` alone are 2.4 s. On the server the same vault warms in
+**3.3 s**; the ratio is the part that transfers, not the absolute figures.
+
 Two stores rather than one, and that is the whole design:
 
     chunks    (vault path, sha256 of the file's bytes)  ->  the chunks it made
